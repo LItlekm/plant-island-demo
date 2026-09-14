@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>植物守岛 · Three.js 玩法原型</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    // 全局错误捕获（便于远程调试）
+    window.__errors = [];
+    window.addEventListener('error', e => { window.__errors.push((e.message || e.type) + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0)); });
+    window.addEventListener('unhandledrejection', e => { window.__errors.push('rejection: ' + ((e.reason && e.reason.message) || e.reason)); });
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
