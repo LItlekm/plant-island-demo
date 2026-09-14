@@ -15,7 +15,7 @@ export class UI {
       <div class="float-layer"></div>
       <div id="hud" class="hidden">
         <div class="hud-top-left panel">
-          <div class="day-line"><span id="day-icon">🌞</span><b id="day-num">第 1 天</b></div>
+          <div class="day-line"><span id="day-icon">🌞</span><b id="day-num">第 1 天</b><span id="diff-badge" class="diff-badge" style="display:none"></span></div>
           <div class="ap-line">行动点 <span id="ap-pips" class="pips"></span> <b id="ap-num">8</b></div>
         </div>
         <div class="hud-top-right panel">
