@@ -170,6 +170,42 @@ export const CROPS = {
     levelBonus: { hp: 6, attack: 2 },
     desc: '对小范围敌人造成伤害，并有概率短暂减速。',
   },
+  // ---------- V0.7：四个原创作物（围绕本作自身系统：连锁 / 召唤 / 木材经济 / 位移控场） ----------
+  arcvine: {
+    id: 'arcvine', name: '弧光藤', icon: '⚡', role: '连锁远程输出',
+    maturityDays: 2, hp: 35, attack: 6, attackInterval: 1.5, range: 4.8,
+    chainHops: 3, chainFall: 0.30,    // 电弧连锁：最多 3 跳，每跳伤害 -30%
+    tags: ['射击'], cost: 45,
+    harvestMaterials: 14,
+    levelBonus: { hp: 6, attack: 2 },
+    desc: '电弧在敌群间跳跃：命中后连锁最多 3 个敌人，每跳伤害 -30%。',
+  },
+  mycomother: {
+    id: 'mycomother', name: '菌母', icon: '🍄', role: '召唤支援',
+    maturityDays: 3, hp: 45, attack: 0, attackInterval: 0, range: 0,
+    summonInterval: 6, summonCap: 2,  // 每 6 秒培育一个蘑菇兵，场上最多 2 个
+    tags: ['生长'], cost: 55,
+    harvestMaterials: 18,
+    levelBonus: { hp: 8 },
+    desc: '每 6 秒培育出一个蘑菇兵并肩作战（场上最多 2 个）。',
+  },
+  timberwood: {
+    id: 'timberwood', name: '丰穣木', icon: '🌳', role: '近战输出 · 木材宝库',
+    maturityDays: 3, hp: 90, attack: 10, attackInterval: 1.6, range: 0,
+    tags: ['生长'], cost: 40,
+    harvestMaterials: 45,             // 全场最高的收割木材回报 → 木材经济核心
+    levelBonus: { hp: 12, attack: 3 },
+    desc: '枝干如铁的近战树。收割它可获得全场最高的木材回报。',
+  },
+  gustgrass: {
+    id: 'gustgrass', name: '风灵草', icon: '🌿', role: '控场辅助',
+    maturityDays: 2, hp: 30, attack: 4, attackInterval: 2.0, range: 4.5,
+    gustInterval: 3.5, gustRadius: 2.4, gustPush: 1.8,   // 定期旋风吹退周围敌人
+    tags: ['投掷'], cost: 40,
+    harvestMaterials: 12,
+    levelBonus: { hp: 5, attack: 1 },
+    desc: '定期掀起旋风，把周围敌人吹退，为防线争取时间。',
+  },
 };
 
 // ---------- 开局构筑（V0.3 新增） ----------
@@ -188,25 +224,25 @@ export const BUILD_START_PLOTS = [1, 2, 0, 3, 8, 9, 10, 11, 4, 5, 6, 7];
 export const STARTING_BUILDS = [
   {
     id: 'balanced', name: '均衡开局', icon: '🌻', tagline: '容错最高',
-    desc: '1 株向日葵 + 1 株豌豆射手。白天有稳定阳光产出，夜晚有基础火力，三种起始种子最全。',
+    desc: '1 株向日葵 + 1 株豌豆射手。白天有稳定阳光产出，夜晚有基础火力，五种起始种子最全（含菌母与风灵草）。',
     plants: ['sunflower', 'peashooter'],
-    seeds: ['sunflower', 'peashooter', 'wallnut'],
+    seeds: ['sunflower', 'peashooter', 'wallnut', 'mycomother', 'gustgrass'],
     sun: 60, materials: 10,
     perk: { label: '全队作物生命 +12%', mod: { hpMul: 0.12 } },
   },
   {
     id: 'assault', name: '攻坚开局', icon: '🫛', tagline: '首夜最稳',
-    desc: '1 株豌豆射手 + 1 株坚果。开局就能扛住第一夜，但没有阳光产出，经济全靠夜战赏金。',
+    desc: '1 株豌豆射手 + 1 株坚果。开局就能扛住第一夜，但没有阳光产出，经济全靠夜战赏金。种子池含连锁输出的弧光藤。',
     plants: ['peashooter', 'wallnut'],
-    seeds: ['peashooter', 'wallnut', 'sunflower'],
+    seeds: ['peashooter', 'wallnut', 'sunflower', 'arcvine'],
     sun: 50, materials: 12,
     perk: { label: '射击作物攻击 +15%', mod: { shootAtkMul: 0.15 } },
   },
   {
     id: 'economy', name: '经济开局', icon: '☀️', tagline: '滚雪球，但首夜最危险',
-    desc: '2 株向日葵起步。白天阳光涨得最快，但第一夜没有任何输出——必须当天现种并培育出战力。',
+    desc: '2 株向日葵起步。白天阳光涨得最快，但第一夜没有任何输出——必须当天现种并培育出战力。种子池含木材宝库丰穣木。',
     plants: ['sunflower', 'sunflower'],
-    seeds: ['sunflower', 'peashooter'],
+    seeds: ['sunflower', 'peashooter', 'timberwood'],
     sun: 100, materials: 8,
     perk: { label: '阳光产出 +25%', mod: { sunMul: 0.25 } },
   },
@@ -267,6 +303,55 @@ export const EVOLUTIONS = {
       bonus: { attack: 4, aoeRadius: 3.2, aoeDamageMul: 1.35 },
     },
   ],
+  // ---------- V0.7：四个新作物的进化方向 ----------
+  arcvine: [
+    {
+      id: 'arc_overload', name: '过载电弧', icon: '🌩️', cost: 85,
+      desc: '伤害大幅提升，连锁增至 4 跳，且每跳衰减更小（-20%）',
+      bonus: { hp: 10, attack: 4, chainHops: 4, chainFall: 0.20 },
+    },
+    {
+      id: 'arc_mark', name: '感电标记', icon: '✴️', cost: 85,
+      desc: '被电弧击中的敌人被标记 3 秒，期间受到的所有伤害 +25%',
+      bonus: { hp: 10, attack: 2, shockMark: 3 },
+    },
+  ],
+  mycomother: [
+    {
+      id: 'myco_tide', name: '菌潮', icon: '🍄', cost: 90,
+      desc: '培育更快（4.5 秒），可同时存在 3 个更强的蘑菇兵',
+      bonus: { hp: 15, summonInterval: 4.5, summonCap: 3, sporelingHp: 30 },
+    },
+    {
+      id: 'myco_toxic', name: '毒孢兵', icon: '☣️', cost: 90,
+      desc: '蘑菇兵攻击更高，阵亡时爆出毒孢伤害周围敌人',
+      bonus: { hp: 10, sporelingAtk: 8, deathBurst: 12 },
+    },
+  ],
+  timberwood: [
+    {
+      id: 'tim_rings', name: '厚木年轮', icon: '🪵', cost: 85,
+      desc: '树皮硬化：生命大幅提高、受伤减免 25%，收割木材 +15',
+      bonus: { hp: 60, hpMul: 1.35, damageReduction: 0.25, harvestMaterials: 15 },
+    },
+    {
+      id: 'tim_guardian', name: '活木守卫', icon: '🛡️', cost: 85,
+      desc: '挥舞枝干吸引敌人（嘲讽半径 6），受击反弹 6 点伤害',
+      bonus: { hp: 40, tauntRadius: 6, thorns: 6 },
+    },
+  ],
+  gustgrass: [
+    {
+      id: 'gust_pull', name: '狂风拢聚', icon: '🌪️', cost: 85,
+      desc: '旋风反转为拢聚：把周围敌人拉向自己集中（重甲减半），方便范围伤害收割',
+      bonus: { attack: 2, gustPull: true },
+    },
+    {
+      id: 'gust_wall', name: '逆风哨位', icon: '🌬️', cost: 85,
+      desc: '风力增强：吹退距离 2.6，被吹退的敌人减速 40% 持续 2 秒',
+      bonus: { attack: 2, gustPush: 2.6, gustSlow: 0.4, gustSlowDur: 2 },
+    },
+  ],
 };
 export function evolutionBranch(defId, branchId) {
   return (EVOLUTIONS[defId] || []).find(b => b.id === branchId) || null;
@@ -281,6 +366,8 @@ export const SYNERGIES = [
   { id: 'guard3', school: '守护', need: 3, desc: '坚果开局获得护盾', icon: '🛡️' },
   { id: 'grow2',  school: '生长', need: 2, desc: '每夜胜利后额外获得 15 阳光', icon: '☀️' },
   { id: 'grow3',  school: '生长', need: 3, desc: '每日首次培育额外 +1 成长', icon: '☀️' },
+  { id: 'throw2', school: '投掷', need: 2, desc: '投掷作物范围 +15%', icon: '🌀' },
+  { id: 'throw4', school: '投掷', need: 4, desc: '投掷作物攻击 +15%', icon: '🌀' },
 ];
 
 // ---------- 夜后三选一强化池（第 4 天解锁） ----------
@@ -342,6 +429,23 @@ export const ENEMIES = {
 export function enemyDayScale(day) {
   return { hp: 1 + 0.11 * (day - 1), dmg: 1 + 0.08 * (day - 1) };
 }
+
+// ---------- 难度选择（V0.7 新增） ----------
+// 在开局时选择，写入 run.difficulty；spawnEnemy 按倍率强化敌人。
+// hard 的 bounty 补偿让困难局的经济不至于落后太多。
+export const DIFFICULTIES = {
+  normal: {
+    id: 'normal', name: '正常', icon: '🌊', tagline: '标准强度',
+    desc: '标准敌人强度，适合首次游玩与熟悉经营节奏。',
+    hpMul: 1, dmgMul: 1, bountyMul: 1,
+  },
+  hard: {
+    id: 'hard', name: '困难', icon: '⛈️', tagline: '敌人全面强化',
+    desc: '敌人生命 +35%、伤害 +30%；作为补偿，击杀赏金 +20%。',
+    hpMul: 1.35, dmgMul: 1.30, bountyMul: 1.20,
+  },
+};
+export function difficultyById(id) { return DIFFICULTIES[id] || DIFFICULTIES.normal; }
 
 // ---------- 十夜波次脚本（文档第 7 节流程表） ----------
 // V0.2：中后期波次加量

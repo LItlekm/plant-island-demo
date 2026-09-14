@@ -15,11 +15,13 @@ export function mulberry32(seed) {
   };
 }
 
-export function createRunState(seed = (Date.now() & 0xffffffff), buildId = D.STARTING_BUILDS[0].id) {
+export function createRunState(seed = (Date.now() & 0xffffffff), buildId = D.STARTING_BUILDS[0].id, difficulty = 'normal') {
   const build = D.buildById(buildId);
   const st = {
     seed, rngState: seed,
     buildId: build.id,
+    // V0.7：难度（'normal' | 'hard'），未知值回落 normal（旧存档兼容）
+    difficulty: D.DIFFICULTIES[difficulty] ? difficulty : 'normal',
     day: 1, phase: 'dayStart', ap: 8,
     sun: build.sun, materials: build.materials,
     city: { level: 1, hp: D.CITY_LEVELS[1].maxHp, maxHp: D.CITY_LEVELS[1].maxHp, armor: D.CITY_LEVELS[1].armor },
@@ -189,13 +191,12 @@ export function canHarvest(st, plantId) {
 export function harvestYield(st, p) {
   const c = CROPS(p.defId);
   const out = {};
+  // 进化加成（V0.7 泛化：不再只查向日葵分支，如厚木年轮的 harvestMaterials +15）
+  const evo = p.evolved ? (D.evolutionBranch(p.defId, p.evolvedId)?.bonus || {}) : {};
   // 向日葵：收获一次性阳光（阳光泵）
   if (c.harvestSun) {
     let s = c.harvestSun;
-    if (p.evolved) {
-      const br = D.evolutionBranch('sunflower', p.evolvedId);
-      if (br?.bonus.harvestSun) s += br.bonus.harvestSun;
-    }
+    if (evo.harvestSun) s += evo.harvestSun;
     out.sun = Math.round(s * (1 + st.mod.sunMul));
   }
   // V0.4：战斗作物收割产出木材（木材 = 建筑统一货币，是白天的主动收入来源）
@@ -204,7 +205,7 @@ export function harvestYield(st, p) {
     const lvB = c.levelBonus || {};
     // 等级越高，割掉越可惜 → 木材回报略高，但永远低于「继续培养」的价值
     const bonus = Math.round(c.harvestMaterials * 0.15 * (p.level - 1));
-    out.materials = c.harvestMaterials + bonus;
+    out.materials = c.harvestMaterials + bonus + (evo.harvestMaterials || 0);
   }
   return out;
 }
@@ -314,13 +315,14 @@ export function doGreenhouse(st) {
   return { ok: true };
 }
 
-// ---------- 进化（V0.2：成熟作物 + 阳光，双方向二选一，无天数/等级/核心限制） ----------
+// ---------- 进化（V0.7：成熟 + 升到 3 级 + 阳光，双方向二选一） ----------
 export function canEvolve(st, plantId, branchId) {
   if (st.phase !== 'day') return check(false, '只能在白天进化');
   const p = st.plants.find(x => x.id === plantId);
   if (!p) return check(false, '作物不存在');
   if (p.evolved) return check(false, '已进化');
   if (!isMature(p)) return check(false, '只有成熟作物可以进化');
+  if ((p.level || 1) < 3) return check(false, '需先升到 3 级');
   const br = D.evolutionBranch(p.defId, branchId);
   if (!br) return check(false, '未知进化方向');
   if (st.sun < br.cost) return check(false, `阳光不足（需要 ${br.cost}）`);
@@ -438,6 +440,8 @@ export function loadRun() {
     if (!raw) return null;
     const st = JSON.parse(raw);
     if (!st || !st.plants) return null;
+    // V0.7：旧存档没有 difficulty 字段 → 回落正常难度
+    if (!st.difficulty || !D.DIFFICULTIES[st.difficulty]) st.difficulty = 'normal';
     return st;
   } catch { return null; }
 }

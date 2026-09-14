@@ -155,6 +155,11 @@ export class UI {
     const isNight = run.phase !== 'day';
     this._$('day-icon').textContent = isNight ? '🌙' : '🌞';
     this._$('day-num').textContent = `第 ${run.day} 天`;
+    // V0.7：难度徽章（只在困难时显示，避免视觉噪音）
+    const diff = D.difficultyById(run.difficulty);
+    const badge = this._$('diff-badge');
+    if (diff.id === 'hard') { badge.textContent = '⛈️ 困难'; badge.style.display = ''; }
+    else badge.style.display = 'none';
     // AP 点阵
     const pips = [];
     for (let i = 0; i < 8; i++) pips.push(`<i class="${i < run.ap ? 'on' : ''}"></i>`);
@@ -312,18 +317,21 @@ export class UI {
     const branches = D.EVOLUTIONS[plant.defId] || [];
     const cards = branches.map((br, i) => {
       const afford = run.sun >= br.cost;
+      // 买不起时也要能看懂原因（修复：阳光不足时弹窗曾无法关闭、卡死）
+      const notAfford = afford ? '' : `<div class="pc-cost" style="color:var(--red)">阳光不足</div>`;
       return `
       <button class="pick-card evo-card" data-idx="${i}" ${afford ? '' : 'disabled style="opacity:0.45;cursor:not-allowed"'}>
         <div class="pc-icon">${br.icon}</div>
         <div class="pc-name">${br.name}</div>
         <div class="pc-desc">${br.desc}</div>
         <div class="pc-cost">🧬 ${br.cost}☀️</div>
+        ${notAfford}
       </button>`;
     }).join('');
     const overlay = this.modal({
       title: `🧬 ${def.name} 进化 · 选择方向`,
-      body: `<div class="dim">进化不可撤销。选择一个方向，效果立即并在今晚生效。</div><div class="pick-grid">${cards}</div>`,
-      buttons: [],
+      body: `<div class="dim">进化不可撤销。选择一个方向，效果立即并在今晚生效。当前阳光：☀️ ${run.sun}</div><div class="pick-grid">${cards}</div>`,
+      buttons: [{ label: '取消', onClick: () => this.closeModal() }],
       wide: true,
     });
     overlay.querySelectorAll('.evo-card').forEach(btn => {
@@ -492,6 +500,27 @@ export class UI {
     });
   }
 
+  // ---------- 难度选择（V0.7：先选难度，再选构筑） ----------
+  showDifficultySelect(diffs, onPick, onCancel) {
+    const cards = Object.values(diffs).map((d, i) => `
+      <button class="pick-card build-card" data-idx="${i}">
+        <div class="pc-icon">${d.icon}</div>
+        <div class="pc-name">${d.name}</div>
+        <div class="pc-tag">${d.tagline}</div>
+        <div class="pc-desc">${d.desc}</div>
+      </button>`).join('');
+    const overlay = this.modal({
+      title: '⚔ 选择难度',
+      body: `<div class="dim">难度决定本局敌人的强度，选定后本局内不可更改。</div>
+        <div class="pick-grid">${cards}</div>`,
+      buttons: onCancel ? [{ label: '返回标题', onClick: () => { this.closeModal(); onCancel(); } }] : [],
+      wide: true,
+    });
+    overlay.querySelectorAll('.pick-card').forEach(btn => {
+      btn.onclick = () => { this.closeModal(); onPick(Object.values(diffs)[Number(btn.dataset.idx)]); };
+    });
+  }
+
   // ---------- 开局构筑选择（V0.3） ----------
   showBuildSelect(builds, onPick, onCancel) {
     const cards = builds.map((b, i) => {
@@ -557,7 +586,7 @@ export class UI {
       body: `
         <div class="title-sub">白天种植培育 · 夜晚作物自动防守 · 十天守住小岛</div>
         <div class="dim">白天用 8 点行动点经营农田；夜晚敌人从海上登陆，你的作物自动迎战。
-        胜利后获得阳光与三选一强化；成熟作物可消耗阳光进化（每类二选一方向），同标签作物激活流派羁绊。
+        胜利后获得阳光与三选一强化；作物升到 3 级后可消耗阳光进化（每类二选一方向），同标签作物激活流派羁绊。
         第 10 夜挑战 Boss 幽灵船长。滚轮缩放视角，右键拖动移动视角。</div>`,
       buttons: [
         ...(hasSave ? [{ label: '📖 继续旅程', cls: 'primary', onClick: () => { this.closeModal(); onContinue(); } }] : []),

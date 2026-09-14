@@ -245,10 +245,11 @@ export class Game {
       cultivate: dm.canCultivate(this.run, plant.id),
       harvest: dm.canHarvest(this.run, plant.id),
       upgrade: dm.canUpgrade(this.run, plant.id),
-      evolve: { ok: !plant.evolved && dm.isMature(plant), reason: '' },
+      evolve: { ok: !plant.evolved && dm.isMature(plant) && (plant.level || 1) >= 3, reason: '' },
     };
     if (plant.evolved) actions.evolve.reason = '已进化';
     else if (!dm.isMature(plant)) actions.evolve.reason = '需先成熟';
+    else if ((plant.level || 1) < 3) actions.evolve.reason = '需先升到 3 级';   // V0.7 进化门槛
     else {
       const minCost = Math.min(...(D.EVOLUTIONS[plant.defId] || [{ cost: Infinity }]).map(b => b.cost));
       if (this.run.sun < minCost) actions.evolve.reason = `阳光不足（需 ${minCost}）`;
@@ -389,58 +390,76 @@ export class Game {
   }
 
   _handleFx(events) {
+    // 特效基准高度统一贴地形（草地 1.0 / 沙滩 0.3 / 海面 -0.42），
+    // 修复 V0.5 抬高地形后硬编码 y 的粒子全部埋在地下的问题
+    const g = (x, z, off) => this.world.groundY(x, z) + off;
     for (const ev of events) {
       switch (ev.type) {
         case 'shoot':
           ev.kind === 'corn' ? sfx.corn() : sfx.shoot();
           break;
         case 'hit':
-          this.world.burst(ev.x, 0.9, ev.z, ev.color || '#aef08a', 4, 1.6, 1.6);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.9), ev.z, ev.color || '#aef08a', 4, 1.6, 1.6);
           sfx.hit();
           break;
         case 'aoe':
-          this.world.burst(ev.x, 0.6, ev.z, '#ffe28a', 12, 3.4, 2.6);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.6), ev.z, '#ffe28a', 12, 3.4, 2.6);
           break;
         case 'pierce':
-          this.world.burst(ev.x, 0.9, ev.z, '#bdf0ff', 5, 1.6, 1.8);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.9), ev.z, '#bdf0ff', 5, 1.6, 1.8);
           break;
         case 'slow':
-          this.world.burst(ev.x, 0.7, ev.z, '#9fd8ff', 3, 1.0, 1.2);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.7), ev.z, '#9fd8ff', 3, 1.0, 1.2);
           break;
         case 'death':
-          this.world.burst(ev.x, 0.7, ev.z, ev.etype === 'boss' ? '#bda8ff' : '#ff8a70', ev.etype === 'boss' ? 26 : 9, 3, 2.6);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.7), ev.z, ev.etype === 'boss' ? '#bda8ff' : '#ff8a70', ev.etype === 'boss' ? 26 : 9, 3, 2.6);
           sfx.die();
-          if (ev.bountySun > 0) this.world.floatText(ev.x, 1.2, ev.z, `+${ev.bountySun}☀️`, 'sun');
+          if (ev.bountySun > 0) this.world.floatText(ev.x, g(ev.x, ev.z, 1.2), ev.z, `+${ev.bountySun}☀️`, 'sun');
           break;
         case 'heal':
-          this.world.burst(ev.x, 0.9, ev.z, '#8ef0a0', 3, 0.8, 1.2);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.9), ev.z, '#8ef0a0', 3, 0.8, 1.2);
           break;
         case 'stun':
-          this.world.burst(ev.x, 1.0, ev.z, '#bfe9ff', 5, 1.0, 1.6);
+          this.world.burst(ev.x, g(ev.x, ev.z, 1.0), ev.z, '#bfe9ff', 5, 1.0, 1.6);
           break;
         case 'splash':
-          this.world.burst(ev.x, 0.7, ev.z, '#c9f08a', 6, 2.0, 1.8);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.7), ev.z, '#c9f08a', 6, 2.0, 1.8);
+          break;
+        case 'chain':   // V0.7 弧光藤连锁电弧
+          this.world.showChain(ev.pts);
+          for (const p of ev.pts) this.world.burst(p.x, g(p.x, p.z, 0.9), p.z, '#9fdcff', 3, 1.2, 1.4);
+          sfx.hit();
+          break;
+        case 'gust':    // V0.7 风灵草旋风
+          this.world.showGust(ev.x, ev.z, ev.r, ev.pull);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.8), ev.z, ev.pull ? '#b9a8ff' : '#eaf6ff', 8, 2.4, 1.6);
+          break;
+        case 'sporeSpawn':   // V0.7 菌母培育蘑菇兵
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.7), ev.z, '#d9c8a8', 6, 1.4, 1.6);
+          break;
+        case 'sporeBurst':   // V0.7 毒孢兵阵亡爆毒
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.7), ev.z, '#8fe07a', 10, 2.2, 2.0);
           break;
         case 'guardHit':
-          this.world.burst(ev.x, 0.9, ev.z, ev.shield ? '#9fd8ff' : '#e8c14a', 3, 1.2, 1.4);
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.9), ev.z, ev.shield ? '#9fd8ff' : '#e8c14a', 3, 1.2, 1.4);
           break;
         case 'guardDown':
-          this.world.burst(ev.x, 0.8, ev.z, '#caa06a', 12, 2.4, 2.4);
-          this.ui.toast('🛡 守护作物倒下了！', 'bad');
+          this.world.burst(ev.x, g(ev.x, ev.z, 0.8), ev.z, '#caa06a', 12, 2.4, 2.4);
+          if (ev.role !== 'attacker') this.ui.toast('🛡 守护作物倒下了！', 'bad');
           break;
         case 'cityHit':
           this.world.shake(0.12 + Math.min(0.25, ev.dmg * 0.006));
-          this.world.burst(D.CITY_POSITION.x, 1.6, D.CITY_POSITION.z + 1.2, '#ff6a55', 6, 2.0, 2.2);
+          this.world.burst(D.CITY_POSITION.x, g(D.CITY_POSITION.x, D.CITY_POSITION.z, 1.6), D.CITY_POSITION.z + 1.2, '#ff6a55', 6, 2.0, 2.2);
           this.world.setCityBar(this.battle.city.hp, this.battle.city.maxHp);
-          this.world.floatText(D.CITY_POSITION.x, 3.4, D.CITY_POSITION.z, `-${ev.dmg}`, 'dmg');
+          this.world.floatText(D.CITY_POSITION.x, g(D.CITY_POSITION.x, D.CITY_POSITION.z, 3.4), D.CITY_POSITION.z, `-${ev.dmg}`, 'dmg');
           sfx.cityHit();
           break;
         case 'land':
-          this.world.burst(ev.x, 0.2, D.BEACH_Z, '#cfeeff', 5, 2.0, 1.8);
+          this.world.burst(ev.x, g(ev.x, D.BEACH_Z, 0.3), D.BEACH_Z, '#cfeeff', 5, 2.0, 1.8);
           break;
         case 'summon':
           this.ui.banner(`<div class="banner-sub">👻 ${ev.label}</div>`, 1600);
-          this.world.burst(ev.x, 1.2, ev.z, '#88a2ff', 16, 3.0, 3.0);
+          this.world.burst(ev.x, g(ev.x, ev.z, 1.2), ev.z, '#88a2ff', 16, 3.0, 3.0);
           sfx.wave();
           break;
         case 'wave':

@@ -142,6 +142,8 @@ export class World {
     this.nightFactor = 0; this.nightTarget = 0;
     this.time = 0;
     this.grassTop = 1.32;           // 草地顶面高度（_buildIsland 里会刷新，这里给个默认值）
+    this.sandTop = 0.62;            // 沙滩顶面高度（_buildIsland 里会刷新）
+    this.waterY = -0.42;            // 海面高度（_buildWater 里会刷新）
 
     // 视图注册表与根组（需先于构建函数初始化）
     this.plotMeshes = [];           // 12 个地块网格
@@ -272,6 +274,7 @@ export class World {
     grass.receiveShadow = true;
     island.add(grass);
     this.grassTop = GRASS_BOTTOM + GRASS_DEPTH;   // 草地顶面高度，供地块/作物对齐
+    this.sandTop = SAND_BOTTOM + SAND_DEPTH;      // 沙滩顶面高度（=0.3），供战斗单位贴地
     this.islandMeshes = [sand, grass];            // 调试句柄：便于外部核对两层高度
 
     // 泥土小径：主城 → 前排登陆区（网格正中偏 +z 一路铺到沙滩）
@@ -320,6 +323,7 @@ export class World {
     this.water = new THREE.Mesh(geo, this.waterMat);
     this.water.rotation.x = -Math.PI / 2;
     this.water.position.y = -0.42;
+    this.waterY = -0.42;
     this.water.receiveShadow = false;
     this.scene.add(this.water);
     this.waterBase = geo.attributes.position.array.slice();
@@ -538,6 +542,73 @@ export class World {
           }
         }
       }
+      // ---------- V0.7：四个原创作物 ----------
+      else if (defId === 'arcvine') {
+        // 弧光藤：藤蔓 + 顶端发光电弧球
+        g.add(mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.8, 6), M(0x2f7a4a), 0, 0.4, 0));
+        for (const s of [-1, 1]) {
+          const t = mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.5, 5), M(0x2f7a4a), s * 0.16, 0.5, 0);
+          t.rotation.z = s * 0.7;
+          g.add(t);
+        }
+        if (full) {
+          const bulb = mesh(new THREE.SphereGeometry(0.22, 8, 6),
+            new THREE.MeshStandardMaterial({ color: 0x9fdcff, emissive: 0x2f8fd8, emissiveIntensity: 1.2, roughness: 0.3 }), 0, 0.92, 0);
+          g.add(bulb);
+          g.userData.head = bulb;
+          for (let i = 0; i < 3; i++) {
+            const a = (i / 3) * Math.PI * 2;
+            g.add(mesh(new THREE.SphereGeometry(0.05, 5, 4), new THREE.MeshBasicMaterial({ color: 0xbfe9ff }),
+              Math.cos(a) * 0.3, 0.92 + Math.sin(a) * 0.1, Math.sin(a) * 0.3));
+          }
+        }
+      } else if (defId === 'mycomother') {
+        // 菌母：粗柄大蘑菇伞
+        g.add(mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.5, 7), M(0xe8d9c8), 0, 0.25, 0));
+        if (full) {
+          const cap = mesh(new THREE.SphereGeometry(0.42, 9, 7, 0, Math.PI * 2, 0, Math.PI / 2), M(0xb8598f), 0, 0.46, 0);
+          g.add(cap);
+          g.userData.head = cap;
+          for (const [sx, sz] of [[-0.18, 0.1], [0.16, -0.12], [0, 0.2]]) {
+            g.add(mesh(new THREE.SphereGeometry(0.05, 5, 4), M(0xf0d9e8), sx, 0.62, sz));
+          }
+        } else {
+          g.add(mesh(new THREE.SphereGeometry(0.2, 7, 5), M(0xb8598f), 0, 0.5, 0));
+        }
+      } else if (defId === 'timberwood') {
+        // 丰穣木：粗壮树干 + 针叶树冠 + 年轮环
+        g.add(mesh(new THREE.CylinderGeometry(0.14, 0.2, 0.7, 7), M(0x7a5230), 0, 0.35, 0));
+        if (full) {
+          const crown = mesh(new THREE.ConeGeometry(0.5, 0.9, 7), M(0x3f9142), 0, 1.1, 0);
+          g.add(crown);
+          g.userData.head = crown;
+          g.add(mesh(new THREE.SphereGeometry(0.3, 7, 5), M(0x4fa352), 0.18, 0.8, 0.1));
+          const band = mesh(new THREE.TorusGeometry(0.16, 0.03, 5, 12), M(0x5e3f22), 0, 0.55, 0);
+          band.rotation.x = Math.PI / 2;
+          g.add(band);
+        } else {
+          g.add(mesh(new THREE.SphereGeometry(0.22, 7, 5), M(0x3f9142), 0, 0.75, 0));
+        }
+      } else if (defId === 'gustgrass') {
+        // 风灵草：细长草叶丛 + 白色风绒球
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2;
+          const blade = mesh(new THREE.ConeGeometry(0.045, 0.6 + (i % 2) * 0.18, 5), M(0x6fbf6a), Math.cos(a) * 0.1, 0.3, Math.sin(a) * 0.1);
+          blade.rotation.z = Math.cos(a) * 0.25;
+          blade.rotation.x = Math.sin(a) * 0.25;
+          g.add(blade);
+        }
+        if (full) {
+          const puff = mesh(new THREE.SphereGeometry(0.18, 8, 6),
+            new THREE.MeshStandardMaterial({ color: 0xf2f7ff, roughness: 0.6, transparent: true, opacity: 0.9 }), 0, 0.85, 0);
+          g.add(puff);
+          g.userData.head = puff;
+          for (let i = 0; i < 6; i++) {
+            const a = (i / 6) * Math.PI * 2;
+            g.add(mesh(new THREE.SphereGeometry(0.025, 4, 3), M(0xffffff), Math.cos(a) * 0.24, 0.85, Math.sin(a) * 0.24));
+          }
+        }
+      }
       if (evolved && full) {
         const ring = mesh(new THREE.TorusGeometry(0.55, 0.045, 6, 22),
           new THREE.MeshBasicMaterial({ color: 0xffd76a, transparent: true, opacity: 0.85 }), 0, 0.35, 0);
@@ -570,6 +641,26 @@ export class World {
 
   // 作物在地块上的落位高度（跟随草地顶面）
   _cropY() { return this.grassTop + 0.55; }
+
+  // ---------- 地形高度查询（V0.6 夜战贴地修正的核心） ----------
+  // 返回 (x,z) 处地面/海面的高度，供战斗单位、敌人与子弹贴地。
+  // 分层：草地(内缩1.1) → 沙滩(全岛) → 海面。圆角矩形用精确判定而非包围盒。
+  _inRoundedRect(x, z, hw, hh, r) {
+    const qx = Math.abs(x) - (hw - r), qz = Math.abs(z) - (hh - r);
+    if (qx > r || qz > r) return false;
+    if (qx > 0 && qz > 0) return qx * qx + qz * qz <= r * r;
+    return true;
+  }
+  groundY(x, z) {
+    const I = D.ISLAND;
+    const cx = (I.minX + I.maxX) / 2, cz = (I.minZ + I.maxZ) / 2;
+    const lx = x - cx, lz = z - cz;
+    const hw = (I.maxX - I.minX) / 2, hd = (I.maxZ - I.minZ) / 2;
+    const gi = 1.1;   // 草地相对沙滩的内缩量（与 _buildIsland 保持一致）
+    if (this._inRoundedRect(lx, lz, hw - gi, hd - gi, Math.max(0.6, I.corner - 0.9))) return this.grassTop;
+    if (this._inRoundedRect(lx, lz, hw, hd, I.corner)) return this.sandTop;
+    return this.waterY;
+  }
 
   // 同步白天农田作物视图
   refreshRun(run) {
@@ -691,9 +782,41 @@ export class World {
     return { group: g, parts };
   }
 
+  // ---------- V0.7：蘑菇兵模型（菌母召唤的临时单位） ----------
+  _buildSporeling() {
+    const g = new THREE.Group();
+    g.add(mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.32, 6), M(0xe8d9c8), 0, 0.16, 0));
+    const cap = mesh(new THREE.SphereGeometry(0.22, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2), M(0x8a6a4a), 0, 0.3, 0);
+    g.add(cap);
+    for (const [sx, sz] of [[-0.08, 0.06], [0.09, -0.04]]) {
+      g.add(mesh(new THREE.SphereGeometry(0.03, 5, 4), M(0xd9c8a8), sx, 0.4, sz));
+    }
+    return g;
+  }
+
+  // V0.7：连锁电弧线段（淡入即逝）
+  showChain(pts) {
+    const vts = pts.map(p => new THREE.Vector3(p.x, this.groundY(p.x, p.z) + 0.9, p.z));
+    const geo = new THREE.BufferGeometry().setFromPoints(vts);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x9fdcff, transparent: true, opacity: 0.95 }));
+    this.fxRoot.add(line);
+    this.chainLines.push({ line, life: 0.18 });
+  }
+
+  // V0.7：旋风冲击环（push 白 / pull 青紫）
+  showGust(x, z, r, pull) {
+    const geo = new THREE.RingGeometry(r * 0.35, r * 0.48, 24);
+    geo.rotateX(-Math.PI / 2);
+    const ring = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: pull ? 0xb9a8ff : 0xeaf6ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false,
+    }));
+    ring.position.set(x, this.groundY(x, z) + 0.15, z);
+    this.fxRoot.add(ring);
+    this.gustRings.push({ ring, life: 0.38, r });
+  }
+
   // ---------- 粒子 ----------
-  _initParticlePool() {
-    for (let i = 0; i < 80; i++) {
+  _initParticlePool() {    for (let i = 0; i < 80; i++) {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 0.14),
         new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: false }));
       m.visible = false;
@@ -788,6 +911,23 @@ export class World {
       p.mesh.lookAt(this.camera.position);
     }
 
+    // V0.7：连锁电弧线段淡出
+    for (const c of this.chainLines) {
+      c.life -= dt;
+      c.line.material.opacity = Math.max(0, c.life / 0.18);
+      if (c.life <= 0) { this.fxRoot.remove(c.line); c.line.geometry.dispose(); c.line.material.dispose(); }
+    }
+    this.chainLines = this.chainLines.filter(c => c.life > 0);
+    // V0.7：旋风冲击环扩散淡出
+    for (const gr of this.gustRings) {
+      gr.life -= dt;
+      const k = Math.max(0, gr.life / 0.38);
+      gr.ring.material.opacity = k * 0.85;
+      gr.ring.scale.setScalar(1 + (1 - k) * 0.6);
+      if (gr.life <= 0) { this.fxRoot.remove(gr.ring); gr.ring.geometry.dispose(); gr.ring.material.dispose(); }
+    }
+    this.gustRings = this.gustRings.filter(g => g.life > 0);
+
     // 漂浮文字
     for (const f of this.floatTexts) {
       f.life -= dt;
@@ -832,12 +972,24 @@ export class World {
   // ============================================================
   syncBattle(b, dt) {
     // 我方单位：作物从农田滑向防守槽位
+    const unitAlive = new Set();
     for (const u of b.units) {
+      unitAlive.add(u.id);
       let v = this.unitViews.get(u.id);
       if (!v) {
-        const pv = [...this.plantViews.values()].find(p => p.group.userData.plantId === u.plantId);
-        const group = pv ? pv.group : this._buildCropModel(u.defId, 'mature', false);
-        if (pv) this.cropRoot.remove(pv.group);
+        // V0.7：临时召唤单位（蘑菇兵）没有农田视图，用专用模型；
+        // 普通作物从 plantViews 拿现成模型滑入战场
+        let group, plantId = null, home = null;
+        if (u.transient) {
+          group = this._buildSporeling();
+          home = { x: u.x, z: u.z };
+        } else {
+          const pv = [...this.plantViews.values()].find(p => p.group.userData.plantId === u.plantId);
+          group = pv ? pv.group : this._buildCropModel(u.defId, 'mature', false);
+          if (pv) this.cropRoot.remove(pv.group);
+          plantId = u.plantId;
+          home = pv ? { x: pv.group.position.x, z: pv.group.position.z } : { x: u.x, z: u.z };
+        }
         // 血条（守护单位）
         let bar = null;
         if (u.role === 'guard') {
@@ -846,7 +998,7 @@ export class World {
           group.add(bar);
         }
         this.unitRoot.add(group);
-        v = { group, bar, unit: u, plantId: u.plantId, home: pv ? { x: pv.group.position.x, z: pv.group.position.z } : { x: u.x, z: u.z } };
+        v = { group, bar, unit: u, plantId, home };
         // 从农田位置出发
         group.position.set(v.home.x, this._cropY(), v.home.z);
         this.unitViews.set(u.id, v);
@@ -854,7 +1006,9 @@ export class World {
       // 平滑移动到战斗位置
       v.group.position.x += (u.x - v.group.position.x) * Math.min(1, dt * 4);
       v.group.position.z += (u.z - v.group.position.z) * Math.min(1, dt * 4);
-      v.group.position.y = this._cropY() + Math.abs(Math.sin(this.time * 2 + u.id)) * 0.03;
+      // V0.6：作物会走动，高度必须贴着脚下的地形（草地/沙滩），不能写死草地高度
+      const gy = this.groundY(v.group.position.x, v.group.position.z) + 0.55;
+      v.group.position.y = gy + Math.abs(Math.sin(this.time * 2 + u.id)) * 0.03;
       v.group.rotation.z = Math.sin(this.time * 2.2 + u.id) * 0.03;
       // 受击闪红
       if (u.hitFlash > 0.05) {
@@ -864,10 +1018,26 @@ export class World {
       }
       v._wasHit = u.hitFlash > 0.05;
       if (v.bar) drawBar(v.bar, Math.max(0, u.hp / u.maxHp));
-      // 死亡倒下
+      // 死亡倒下（贴地倒下，不再穿进地形）
       const targetRot = u.dead ? Math.PI / 2 : 0;
       v.group.rotation.x += (targetRot - v.group.rotation.x) * Math.min(1, dt * 3);
-      if (u.dead) v.group.position.y = Math.max(0.15, v.group.position.y - dt * 0.5);
+      if (u.dead) v.group.position.y = Math.max(gy - 0.32, v.group.position.y - dt * 0.5);
+    }
+
+    // V0.7：单位视图存活集同步 —— 死亡输出单位会被 battle.js 立即移出 units，
+    // 视图短暂下沉淡出后移除（同时清掉 plantViews 引用，让次日 refreshRun 重建），
+    // 修复此前"冻结站立尸体"残留的问题；召唤的蘑菇兵同样在此回收。
+    for (const [id, v] of [...this.unitViews]) {
+      if (unitAlive.has(id)) continue;
+      if (v.fadeT == null) v.fadeT = 0.5;
+      v.fadeT -= dt;
+      v.group.position.y -= dt * 0.9;
+      v.group.scale.multiplyScalar(Math.max(0.01, 1 - dt * 1.6));
+      if (v.fadeT <= 0) {
+        this.unitRoot.remove(v.group);
+        if (v.plantId) this.plantViews.delete(v.plantId);
+        this.unitViews.delete(id);
+      }
     }
 
     // 敌人
@@ -880,30 +1050,34 @@ export class World {
         const bar = makeCanvasSprite(null, 64, 10, [0.95, 0.15]);
         bar.position.y = e.type === 'boss' ? 2.6 : (e.type === 'giant' ? 2.1 : 1.0);
         group.add(bar);
-        group.position.set(e.x, -0.2, e.z); // 从海里冒出
+        // 从脚下地形下方 1.0 处冒出（修复：V0.5 抬高了沙滩/草地后，
+        // 敌人固定 y=0.18 会导致上岸即被埋进地形里）
+        const gy0 = this.groundY(e.x, e.z);
+        group.position.set(e.x, gy0 - 1.0, e.z);
         this.unitRoot.add(group);
-        v = { group, bar, type: e.type, parts, spawnY: -0.2 };
+        v = { group, bar, type: e.type, parts };
         this.enemyViews.set(e.id, v);
       }
-      // 入场：从水下浮出
-      v.group.position.y = Math.min(0.18, v.group.position.y + dt * 1.4);
+      // 贴地：向脚下地形高度平滑收敛（入场浮出 / 涉水登陆 / 爬上草地全靠这一行）
+      const gy = this.groundY(e.x, e.z);
+      const baseY = v.group.position.y + (gy - v.group.position.y) * Math.min(1, dt * 2.5);
       v.group.position.x = e.x;
       v.group.position.z = e.z;
       // 朝向移动方向
       const dx = (e._lastX !== undefined ? e.x - e._lastX : 0), dz = (e._lastZ !== undefined ? e.z - e._lastZ : 0);
       if (Math.hypot(dx, dz) > 0.001) v.group.rotation.y = Math.atan2(dx, dz);
       e._lastX = e.x; e._lastZ = e.z;
-      // 动画
+      // 动画（在贴地高度上叠加弹跳/起伏，绝对赋值避免累积漂移）
       const walkPhase = this.time * (e.type === 'fish' ? 9 : 6) + e.id;
       if (e.type === 'fish') {
-        v.group.position.y = 0.18 + Math.abs(Math.sin(walkPhase)) * 0.22;
+        v.group.position.y = baseY + Math.abs(Math.sin(walkPhase)) * 0.22;
         v.group.rotation.z = Math.sin(walkPhase) * 0.15;
       } else if (e.type === 'boss') {
-        v.group.position.y = 0.3 + Math.sin(this.time * 2) * 0.08;
+        v.group.position.y = baseY + 0.12 + Math.sin(this.time * 2) * 0.08;
         v.group.rotation.y = Math.sin(this.time * 1.2) * 0.15;
       } else {
+        v.group.position.y = baseY;
         v.group.rotation.z = Math.sin(walkPhase) * 0.07;
-        v.group.position.y = 0.18;
       }
       // 攻击前倾
       if (e.attackAnim > 0.5) v.group.rotation.x = -0.3 * (e.attackAnim - 0.5) * 2;
@@ -941,7 +1115,9 @@ export class World {
       }
       const total = Math.hypot(pr.lx - pr.x0, pr.lz - pr.z0) || 1;
       const progress = Math.min(1, Math.hypot(pr.x - pr.x0, pr.z - pr.z0) / total);
-      v.mesh.position.set(pr.x, pr.kind === 'corn' ? 0.6 + Math.sin(progress * Math.PI) * 1.5 : 0.75, pr.z);
+      // 子弹高度贴着脚下地形（修复：草地顶面抬高后固定 y=0.75 的子弹全程埋在地里）
+      const pgy = this.groundY(pr.x, pr.z);
+      v.mesh.position.set(pr.x, pgy + (pr.kind === 'corn' ? 0.6 + Math.sin(progress * Math.PI) * 1.5 : 0.75), pr.z);
     }
     for (const v of [...this.projViews]) {
       if (!projSeen.has(v.proj)) {
@@ -972,6 +1148,11 @@ export class World {
     this.enemyViews.clear();
     for (const v of this.projViews) this.fxRoot.remove(v.mesh);
     this.projViews.clear();
+    // V0.7：连锁线与旋风环也一并清场
+    for (const c of this.chainLines) this.fxRoot.remove(c.line);
+    this.chainLines = [];
+    for (const gr of this.gustRings) this.fxRoot.remove(gr.ring);
+    this.gustRings = [];
   }
 
   // ---------- 交互拾取 ----------
