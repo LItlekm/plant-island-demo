@@ -27,7 +27,10 @@ export function createBattle(run) {
     city: {
       x: D.CITY_POSITION.x, z: D.CITY_POSITION.z,
       hp: run.city.hp, maxHp: run.city.maxHp, armor: run.city.armor,
+      level: run.city.level,
       dr: syn.includes('guard2') ? 0.10 : 0,
+      // V0.8：城防尖刺 —— 攻击主城的敌人受到反噬伤害，随城防等级提升
+      thorns: D.CITY_THORNS.base + D.CITY_THORNS.perLevel * (run.city.level - 1),
     },
     summary: { kills: 0, giantsKilled: 0, bossKilled: 0, bountySun: 0 },
     stats: { waveCount: waves.length },
@@ -70,10 +73,16 @@ export function createBattle(run) {
     let dr = 0, shield = 0, tauntRadius = c.tauntRadius || 0, doubleShot = false;
     let attackMul = 1, speedBonus = 0, splashRadius = 0, splashMul = 0, stunChance = 0, stunDuration = 0;
     let healPerSec = 0, thornsUnit = 0;
+    // V0.8：向日葵治疗脉冲（基础向日葵也参战治疗，翠光进化额外叠加持续回复）
+    let healPulse = 0, healPulseCd = 0;
+    if (c.healPulseCd) {
+      healPulse = c.healPulse + (c.healPulsePerLevel || 0) * (p.level - 1);
+      healPulseCd = c.healPulseCd * 0.5;   // 开战 2.5s 后先治疗一次
+    }
     // V0.7：新作物机制字段
     let chainHops = c.chainHops || 0, chainFall = c.chainFall || 0.30, shockMark = 0;
     let summonInterval = c.summonInterval || 0, summonCap = c.summonCap || 0;
-    let sporelingHp = 22, sporelingAtk = 5, deathBurst = 0;
+    let sporelingHp = 30, sporelingAtk = 7, deathBurst = 0;   // V0.8：蘑菇兵加强
     let gustInterval = c.gustInterval || 0, gustRadius = c.gustRadius || 0, gustPush = c.gustPush || 0;
     let gustPull = false, gustSlow = 0, gustSlowDur = 0;
 
@@ -142,6 +151,9 @@ export function createBattle(run) {
       doubleShot, secondShotT: 0,
       splashRadius, splashMul,
       healTick: 0,
+      // V0.8：向日葵治疗脉冲
+      healPulse, healPulseCd,
+      attackAnim: 0,
       tauntRadius, pierce: false, firedOnce: false, dead: false, hitFlash: 0,
       // V0.7：连锁 / 召唤 / 旋风字段
       chainHops, chainFall, shockMark,
@@ -226,6 +238,7 @@ export function stepBattle(b, dtRaw) {
   for (const u of b.units) {
     if (u.dead) continue;
     u.hitFlash = Math.max(0, u.hitFlash - dt * 4);
+    u.attackAnim = Math.max(0, (u.attackAnim || 0) - dt * 3);
     // 治疗光环（翠光向日葵 / 战地园丁）：每 0.5s 结算一次
     if (u.regen > 0 && u.hp < u.maxHp) {
       u.healTick += dt;
@@ -234,6 +247,22 @@ export function stepBattle(b, dtRaw) {
         const amount = Math.max(1, Math.round(u.regen * 0.5));
         u.hp = Math.min(u.maxHp, u.hp + amount);
         emit(b, { type: 'heal', x: u.x, z: u.z, amount });
+      }
+    }
+    // V0.8：向日葵治疗脉冲 —— 每 5 秒为全体友军回复固定生命
+    if (u.healPulse > 0) {
+      u.healPulseCd -= dt;
+      if (u.healPulseCd <= 0) {
+        u.healPulseCd = D.CROPS[u.defId].healPulseCd;
+        const amount = u.healPulse;
+        let healed = 0;
+        for (const a of b.units) {
+          if (a.dead || a.hp >= a.maxHp) continue;
+          a.hp = Math.min(a.maxHp, a.hp + amount);
+          healed++;
+        }
+        // 满血也播放脉冲（视觉节拍稳定），但只在有友军在场时
+        if (b.units.some(a => !a.dead)) emit(b, { type: 'healPulse', x: u.x, z: u.z, amount, healed });
       }
     }
     if (u.secondShotT > 0) {
@@ -292,8 +321,16 @@ export function stepBattle(b, dtRaw) {
       if (target) {
         u.cd = u.interval;
         // V0.7：连锁电弧作物（弧光藤）即时结算，不走投射物
-        if (u.chainHops > 0) chainZap(b, u, target);
-        else {
+        if (u.chainHops > 0) {
+          u.attackAnim = 1;
+          chainZap(b, u, target);
+        } else if (u.range <= 0) {
+          // V0.8：近战作物（丰穣木 / 蘑菇兵）直接挥击，不再发射子弹
+          u.attackAnim = 1;
+          const dmg = Math.max(1, Math.round(u.atk - (target.armor || 0)));
+          dealEnemyDamage(b, target, dmg);
+          emit(b, { type: 'melee', x: u.x, z: u.z, tx: target.x, tz: target.z, defId: u.defId });
+        } else {
           fireAt(b, u, target);
           if (u.doubleShot) u.secondShotT = 0.16;
         }
@@ -334,18 +371,17 @@ export function stepBattle(b, dtRaw) {
     // 登陆反馈
     if (!e.landed && e.z <= D.BEACH_Z) { e.landed = true; emit(b, { type: 'land', x: e.x }); }
 
-    // 目标选择优先级（V0.6）：
-    //   1) 嘲讽范围内的守护作物（tauntImmune 只受进化嘲讽）
-    //   2) 攻击距离内贴脸的任意作物 —— 去主城的路上遇到就打，不再无视防线直冲主城
-    //   3) 主城
+    // 目标选择优先级（V0.8 调整：敌人优先攻击作物，没有可打的作物才进攻主城）：
+    //   1) 嘲讽强制（坚果/活木守卫的 tauntRadius；tauntImmune 只受全场嘲讽）
+    //   2) 距离最近的任意作物（不再只打"贴脸"的——敌人会主动绕过去拆防线）
+    //   3) 主城（Boss 默认直奔主城，除非被全场嘲讽）
     let target = pickGuardFor(b, e);
-    if (!target) {
+    if (!target && !e.tauntImmune) {
       let bestD = Infinity;
       for (const u of b.units) {
         if (u.dead) continue;
         const d = Math.hypot(u.x - e.x, u.z - e.z);
-        const reach = u.radius + e.radius + 0.35;
-        if (d <= reach && d < bestD) { bestD = d; target = u; }
+        if (d < bestD) { bestD = d; target = u; }
       }
     }
     const tx = target ? target.x : b.city.x;
@@ -368,7 +404,10 @@ export function stepBattle(b, dtRaw) {
         } else {
           const dmg = Math.max(1, Math.round(e.dmg * (1 - b.city.dr)) - b.city.armor);
           b.city.hp -= dmg;
-          emit(b, { type: 'cityHit', dmg, x: b.city.x + (Math.random() - 0.5), z: b.city.z });
+          // V0.8：城防尖刺 —— 攻城的敌人被反噬
+          const thornDmg = b.city.thorns || 0;
+          if (thornDmg > 0) dealEnemyDamage(b, e, thornDmg);
+          emit(b, { type: 'cityHit', dmg, x: b.city.x + (Math.random() - 0.5), z: b.city.z, thorns: thornDmg, ex: e.x, ez: e.z });
           if (b.city.hp <= 0) {
             b.city.hp = 0; b.over = true; b.win = false;
             emit(b, { type: 'end', win: false });
@@ -484,17 +523,22 @@ function fireAt(b, u, target) {
   const kind = u.tags.includes('投掷') ? 'corn' : 'pea';
   const usePierce = b.pierceArmed && !u.firedOnce && u.tags.includes('射击');
   u.firedOnce = true;
+  // V0.8：弹幕尺寸与威力挂钩 —— 巨弹豌豆明显更大，攻击越高弹丸越大
+  let size = kind === 'corn' ? 0.17 : 0.11;
+  if (u.splashRadius > 0) size = 0.26;                       // 巨弹豌豆
+  else if (kind === 'pea') size = Math.min(0.2, 0.09 + u.atk * 0.006);
+  if (u.branchId === 'pea_rapid') size *= 0.8;               // 连射：弹体略小更密集
   b.projectiles.push({
     x: u.x, z: u.z - 0.4, x0: u.x, z0: u.z - 0.4, y0: 0.8,
     targetId: target.id, lx: target.x, lz: target.z,
     speed: kind === 'corn' ? 6.5 : 10,
-    rawAtk: u.atk, kind, aoeRadius: u.aoeRadius,
+    rawAtk: u.atk, kind, aoeRadius: u.aoeRadius, size,
     slowChance: u.slowChance, slowDuration: u.slowDuration, slowFactor: u.slowFactor,
     stunChance: u.stunChance, stunDuration: u.stunDuration,
     splashRadius: u.splashRadius, splashMul: u.splashMul,
     pierce: usePierce, done: false, t: 0,
   });
-  emit(b, { type: 'shoot', x: u.x, z: u.z, kind, defId: u.defId });
+  emit(b, { type: 'shoot', x: u.x, z: u.z, kind, defId: u.defId, size });
 }
 
 function bulletHit(b, pr, target) {
@@ -528,7 +572,8 @@ function bulletHit(b, pr, target) {
 
 function cornImpact(b, pr, x, z) {
   const r = pr.aoeRadius;
-  emit(b, { type: 'aoe', x, z, r });
+  // V0.8：爆炸事件（表现层播放火光冲击环），区别于普通命中的小火花
+  emit(b, { type: 'explosion', x, z, r });
   for (const e of b.enemies) {
     if (e.dead) continue;
     if (Math.hypot(e.x - x, e.z - z) <= r + e.radius) {

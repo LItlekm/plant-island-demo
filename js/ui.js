@@ -40,6 +40,7 @@ export class UI {
         <div class="panel seeds" id="seed-list"></div>
         <div class="panel global-actions">
           <button id="btn-expand" class="action-btn"></button>
+          <button id="btn-chop" class="action-btn"></button>
           <button id="btn-greenhouse" class="action-btn"></button>
           <button id="btn-cityup" class="action-btn"></button>
         </div>
@@ -81,6 +82,7 @@ export class UI {
   _bind() {
     this._$('btn-endday').onclick = () => this.cb.onEndDay();
     this._$('btn-expand').onclick = () => this.cb.onExpand();
+    this._$('btn-chop').onclick = () => this.cb.onChop();
     this._$('btn-greenhouse').onclick = () => this.cb.onGreenhouse();
     this._$('btn-cityup').onclick = () => this.cb.onCityUpgrade();
     this._$('btn-forecast').onclick = () => this.cb.onOpenForecast();
@@ -271,6 +273,10 @@ export class UI {
     this._$('btn-greenhouse').innerHTML = `温室<small>${D.ACTION_COST.greenhouse.ap}AP + ${D.ACTION_COST.greenhouse.materials}🪵</small>`;
     this._$('btn-greenhouse').disabled = !ghOk;
     this._$('btn-greenhouse').title = ghOk ? '建造后所有作物每日自然成长 +1' : (run.features.greenhouse ? '已建造' : '第 8 天解锁');
+    // V0.8：伐木（1 AP → 木材）
+    this._$('btn-chop').innerHTML = `伐木<small>1AP + ${D.CHOP_YIELD}🪵</small>`;
+    this._$('btn-chop').disabled = run.ap < D.ACTION_COST.plant.ap;
+    this._$('btn-chop').title = '砍伐岛上的树木换取木材（不占农田，随时可做）';
     const cuCost = D.ACTION_COST.cityUpgrade.sunByLevel[run.city.level + 1];
     this._$('btn-cityup').innerHTML = `主城升级<small>${cuCost ? cuCost + '☀️' : '已满级'}</small>`;
     this._$('btn-cityup').disabled = !cuCost || run.sun < cuCost;
@@ -390,7 +396,7 @@ export class UI {
     this._$('city-panel').innerHTML = `
       <div class="pp-head">🏠 <b>主城</b> <span class="lv">Lv.${run.city.level}</span></div>
       <div class="pp-row">生命 ${run.city.hp}/${run.city.maxHp} ｜ 护甲 ${run.city.armor}</div>
-      <div class="pp-row dim">主城生命归零则当夜失败，可从当日白天重试。</div>
+      <div class="pp-row dim">主城生命归零即本局失败。攻击主城的敌人会被城防尖刺反噬（当前反噬 ${D.CITY_THORNS.base + D.CITY_THORNS.perLevel * (run.city.level - 1)} 点/次）。</div>
       <div class="pp-btns">
         ${next ? `<button class="panel-btn gold" id="cp-up" ${run.sun >= next ? '' : 'disabled'}>⬆ 升到 Lv.${run.city.level + 1}<small>${next}☀️ → 生命+50 护甲+1 完全修复</small></button>` : '<span class="dim">已达最高等级</span>'}
       </div>
@@ -521,40 +527,104 @@ export class UI {
     });
   }
 
-  // ---------- 开局构筑选择（V0.3） ----------
+  // ---------- 开局构筑选择（V0.3；V0.8 起手作物图形化展示） ----------
   showBuildSelect(builds, onPick, onCancel) {
     const cards = builds.map((b, i) => {
-      const plants = b.plants.map(id => `${D.CROPS[id].icon}${D.CROPS[id].name}`).join(' ＋ ');
+      // 起手作物用大图标 + 名称的"小卡"清晰呈现（不只是文字）
+      const crops = b.plants.map(id => {
+        const c = D.CROPS[id];
+        return `<span class="pc-crop" title="${c.name}｜${c.role}">${c.icon}<small>${c.name}</small></span>`;
+      }).join('<span class="pc-plus">＋</span>');
       return `
       <button class="pick-card build-card" data-idx="${i}">
-        <div class="pc-icon">${b.icon}</div>
-        <div class="pc-name">${b.name}</div>
+        <div class="pc-crops">${crops}</div>
+        <div class="pc-name">${b.icon} ${b.name}</div>
         <div class="pc-tag">${b.tagline}</div>
         <div class="pc-desc">${b.desc}</div>
-        <div class="pc-stat">起手　${plants}</div>
         <div class="pc-stat">资源　☀️${b.sun} · 🪵${b.materials} · 自带${b.plants.length}格农田</div>
         <div class="pc-cost">${b.perk.label}</div>
       </button>`;
     }).join('');
     const overlay = this.modal({
       title: '🌱 选择开局构筑',
-      body: `<div class="dim">构筑决定起始作物、本局种子池、初始资源与专属特性。选定后本局内不可更换。</div>
+      body: `<div class="dim">构筑只决定你的起手作物、初始资源与专属特性；本局的种子在下一步自行挑选携带（最多 5 种）。</div>
         <div class="pick-grid">${cards}</div>`,
-      buttons: onCancel ? [{ label: '返回标题', onClick: () => { this.closeModal(); onCancel(); } }] : [],
+      buttons: onCancel ? [{ label: '返回', onClick: () => { this.closeModal(); onCancel(); } }] : [],
       wide: true,
     });
-    overlay.querySelectorAll('.pick-card').forEach(btn => {
+    overlay.querySelectorAll('.build-card').forEach(btn => {
       btn.onclick = () => { this.closeModal(); onPick(builds[Number(btn.dataset.idx)]); };
     });
   }
 
+  // ---------- V0.8：开局种子携带（从其余作物中自选，最多 5 种） ----------
+  showSeedSelect(build, onConfirm, onBack) {
+    const choices = D.seedChoicesFor(build.id);   // 构筑起手作物之外的种子
+    const picked = new Set();
+    let confirmed = false;
+    const body = `
+      <div class="dim">构筑给了你 <b>${build.plants.map(id => D.CROPS[id].name).join('、')}</b> 的种苗。
+      再从下面挑选最多 <b>${D.MAX_CARRY_SEEDS}</b> 种种子随身携带——它们决定本局能种什么。</div>
+      <div class="pick-grid seed-pick-grid">
+        ${choices.map(id => {
+          const c = D.CROPS[id];
+          return `
+          <button class="pick-card seed-pick" data-seed="${id}">
+            <div class="pc-icon">${c.icon}</div>
+            <div class="pc-name">${c.name}</div>
+            <div class="pc-desc">${c.role}<br>${c.desc}</div>
+            <div class="pc-cost">${c.cost}☀️</div>
+          </button>`;
+        }).join('')}
+      </div>
+      <div class="seed-pick-bar"><span id="seed-count">已选 0 / ${D.MAX_CARRY_SEEDS}</span>
+        <button class="modal-btn primary" id="seed-confirm" disabled>确认携带并出发</button>
+      </div>`;
+    const overlay = this.modal({
+      title: '🎒 挑选随身种子',
+      body,
+      buttons: [{ label: '返回上一步', onClick: () => { confirmed = true; this.closeModal(); onBack(); } }],
+      wide: true,
+    });
+    const refresh = () => {
+      overlay.querySelectorAll('.seed-pick').forEach(btn => {
+        const on = picked.has(btn.dataset.seed);
+        btn.classList.toggle('picked', on);
+        if (!on && picked.size >= D.MAX_CARRY_SEEDS) btn.disabled = true;
+        else btn.disabled = false;
+      });
+      const cnt = overlay.querySelector('#seed-count');
+      if (cnt) cnt.textContent = `已选 ${picked.size} / ${D.MAX_CARRY_SEEDS}`;
+      const confirmBtn = overlay.querySelector('#seed-confirm');
+      if (confirmBtn) confirmBtn.disabled = picked.size === 0;
+    };
+    overlay.querySelectorAll('.seed-pick').forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.dataset.seed;
+        if (picked.has(id)) picked.delete(id);
+        else if (picked.size < D.MAX_CARRY_SEEDS) picked.add(id);
+        refresh();
+      };
+    });
+    const confirmBtn = overlay.querySelector('#seed-confirm');
+    confirmBtn.onclick = () => {
+      if (confirmed) return;
+      confirmed = true;
+      this.closeModal();
+      onConfirm([...picked]);
+    };
+  }
+
   // ---------- 失败 / 胜利 ----------
-  showDefeat(run, onRetry, onTitle) {
+  // V0.8：主城陷落即本局失败（不再提供当日重试）
+  showDefeat(run, onRestart, onTitle) {
     this.modal({
       title: `💥 第 ${run.day} 夜 · 主城陷落`,
-      body: `<div>防线被突破了。总结教训，从当日白天重新开始——作物与资源会回到早晨的状态。</div>`,
+      body: `<div>防线被突破了，小岛沦陷——本局到此结束。</div>
+        <div class="dim" style="margin-top:6px">本局战绩：坚守 ${run.stats.nightsWon} 夜 · 击杀 ${run.stats.killed} · 进化 ${run.stats.evolvedCount} 株</div>
+        <div class="fc-hint">小提示：攻击主城的敌人会被城防尖刺反噬（随主城等级提升）；前期多伐木、多铺农田，防线会更稳。</div>`,
       buttons: [
-        { label: '🔁 重试第 ' + run.day + ' 天', cls: 'primary', onClick: () => { this.closeModal(); onRetry(); } },
+        { label: '🌱 再来一局', cls: 'primary', onClick: () => { this.closeModal(); onRestart(); } },
         { label: '回到标题', onClick: () => { this.closeModal(); onTitle(); } },
       ],
     });
@@ -601,9 +671,9 @@ export class UI {
       title: '❓ 玩法说明',
       body: `
         <div class="help-grid">
-          <div><b>☀️ 白天（8 行动点）</b><br>种植 1AP · 培育 1AP（+1成长）· 收获 1AP<br>升级 0AP+阳光（最高3级）· 建造农田 1AP+木材🪵<br>建造 = 点击任意一格荒草地，农田立刻放上去<br>收割作战作物可获得木材🪵<br>点地块/作物操作，点主城升级城防。</div>
-          <div><b>🌙 夜晚（自动战斗）</b><br>成熟作物自动进入防守阵列：<br>坚果嘲讽承伤，豌豆/玉米远程输出。<br>清空敌人即胜；主城破则当日重试。</div>
-          <div><b>🧬 进化与成长</b><br>成熟作物可花费阳光进化，每类二选一：<br>豌豆：巨弹溅射 / 连射；坚果：铁甲 / 尖刺反伤<br>向日葵：光耀产阳 / 翠光治疗；玉米：冰霜定身 / 爆裂。<br>同标签 2/3/4 株激活流派羁绊（顶部可查看）。</div>
+          <div><b>☀️ 白天（8 行动点）</b><br>种植 1AP · 培育 1AP（+1成长）· 收获 1AP<br>伐木 1AP（+5木材）· 建造农田 1AP+木材🪵<br>升级 0AP+阳光 · 进化 0AP+阳光（3级解锁）<br>建造 = 点击任意一格荒草地；收割作物可得木材。</div>
+          <div><b>🌙 夜晚（自动战斗）</b><br>成熟作物自动迎战：坚果/丰穣木顶前排，<br>豌豆/玉米/弧光藤远程输出，向日葵周期治疗。<br>敌人优先攻击作物，攻城的会被城防尖刺反噬！<br>清空敌人即胜；主城破则本局失败。</div>
+          <div><b>🧬 进化与成长</b><br>成熟作物升到 3 级后可花阳光进化（二选一）。<br>同标签 2/3/4 株激活流派羁绊（顶部可查看）。</div>
           <div><b>🎥 视角与十天目标</b><br>滚轮缩放视角；按住右键拖动移动视角。<br>资源只有阳光☀️与木材🪵。<br>每天早上看威胁预告，第 10 夜击败 Boss。</div>
         </div>`,
       buttons: [{ label: '返回', cls: 'primary', onClick: () => { this.closeModal(); back?.(); } }],

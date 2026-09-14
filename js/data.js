@@ -117,6 +117,11 @@ export const CITY_LEVELS = {
   3: { maxHp: 200, armor: 2 },
 };
 
+// V0.8：城防尖刺 —— 攻击主城的敌人会被反噬固定伤害（随城防等级提升）
+export const CITY_THORNS = { base: 20, perLevel: 10 };   // L1=20, L2=30, L3=40
+// V0.8：伐木行动（1 AP → 木材）
+export const CHOP_YIELD = 5;
+
 // V0.4：农田建造价查表（单一数据源，domain 与 ui 都调它，避免两处索引逻辑不同步）。
 // built = 已建成的农田数量（含构筑自带，故内部减掉 INITIAL_PLOTS 再查表）。
 // 价格表用尽时回落到最后一档，而不是返回 null —— 兜底避免"无价可查"崩掉 UI。
@@ -141,8 +146,10 @@ export const CROPS = {
     harvestSun: 30,       // 收获一次性阳光
     harvestMaterials: 0,  // V0.4：向日葵不产木材
     teamBuff: 0.08,       // 夜间全队攻击加成（每株）
+    // V0.8：向日葵参战时获得周期性治疗脉冲（CD 5s，为全体友军回复）
+    healPulseCd: 5, healPulse: 8, healPulsePerLevel: 3,
     levelBonus: { hp: 5, passiveSun: 4, teamBuff: 0.02 },
-    desc: '成熟时每天产出阳光；夜晚为全队提供攻击加成。',
+    desc: '成熟时每天产出阳光；夜晚为全队周期性治疗并提供攻击加成。',
   },
   peashooter: {
     id: 'peashooter', name: '豌豆射手', icon: '🫛', role: '单体远程输出',
@@ -182,12 +189,12 @@ export const CROPS = {
   },
   mycomother: {
     id: 'mycomother', name: '菌母', icon: '🍄', role: '召唤支援',
-    maturityDays: 3, hp: 45, attack: 0, attackInterval: 0, range: 0,
-    summonInterval: 6, summonCap: 2,  // 每 6 秒培育一个蘑菇兵，场上最多 2 个
+    maturityDays: 3, hp: 55, attack: 0, attackInterval: 0, range: 0,
+    summonInterval: 5, summonCap: 3,  // V0.8 加强：每 5 秒培育一个蘑菇兵，场上最多 3 个
     tags: ['生长'], cost: 55,
     harvestMaterials: 18,
-    levelBonus: { hp: 8 },
-    desc: '每 6 秒培育出一个蘑菇兵并肩作战（场上最多 2 个）。',
+    levelBonus: { hp: 10 },
+    desc: '每 5 秒培育出一个蘑菇兵并肩作战（场上最多 3 个）。',
   },
   timberwood: {
     id: 'timberwood', name: '丰穣木', icon: '🌳', role: '近战输出 · 木材宝库',
@@ -249,6 +256,14 @@ export const STARTING_BUILDS = [
 ];
 export function buildById(id) {
   return STARTING_BUILDS.find(b => b.id === id) || STARTING_BUILDS[0];
+}
+
+// ---------- V0.8：开局种子携带 ----------
+// 构筑只决定起始作物；种子由玩家从"其余作物"中自由选择，最多带 MAX_CARRY_SEEDS 种。
+export const MAX_CARRY_SEEDS = 5;
+export function seedChoicesFor(buildId) {
+  const build = buildById(buildId);
+  return Object.keys(CROPS).filter(id => !build.plants.includes(id));
 }
 
 // ---------- 进化定义（V0.2 重构） ----------
@@ -319,13 +334,13 @@ export const EVOLUTIONS = {
   mycomother: [
     {
       id: 'myco_tide', name: '菌潮', icon: '🍄', cost: 90,
-      desc: '培育更快（4.5 秒），可同时存在 3 个更强的蘑菇兵',
-      bonus: { hp: 15, summonInterval: 4.5, summonCap: 3, sporelingHp: 30 },
+      desc: '培育更快（4 秒），可同时存在 4 个更强的蘑菇兵',
+      bonus: { hp: 15, summonInterval: 4, summonCap: 4, sporelingHp: 34 },
     },
     {
       id: 'myco_toxic', name: '毒孢兵', icon: '☣️', cost: 90,
       desc: '蘑菇兵攻击更高，阵亡时爆出毒孢伤害周围敌人',
-      bonus: { hp: 10, sporelingAtk: 8, deathBurst: 12 },
+      bonus: { hp: 10, sporelingAtk: 9, deathBurst: 12 },
     },
   ],
   timberwood: [
@@ -396,7 +411,7 @@ export const ENEMIES = {
   },
   sailor: {
     id: 'sailor', name: '海盗水手', icon: '🏴‍☠️', role: '标准近战', introDay: 2,
-    hp: 78, damage: 15, speed: 1.05, attackInterval: 1.3, armor: 1, radius: 0.4,
+    hp: 70, damage: 12, speed: 1.05, attackInterval: 1.3, armor: 1, radius: 0.4,
     bounty: { sun: 9 },
     desc: '中等生命与稳定伤害。',
   },
@@ -408,7 +423,7 @@ export const ENEMIES = {
   },
   giant: {
     id: 'giant', name: '礁石巨人', icon: '🗿', role: '重甲精英', introDay: 5,
-    hp: 430, damage: 32, speed: 0.75, attackInterval: 2.0, armor: 5, radius: 0.8,
+    hp: 270, damage: 26, speed: 0.75, attackInterval: 2.0, armor: 2, radius: 0.8,
     bounty: { sun: 45 },
     desc: '高生命、低速度，检验持续输出与守护。',
   },
@@ -448,17 +463,17 @@ export const DIFFICULTIES = {
 export function difficultyById(id) { return DIFFICULTIES[id] || DIFFICULTIES.normal; }
 
 // ---------- 十夜波次脚本（文档第 7 节流程表） ----------
-// V0.2：中后期波次加量
+// V0.8：第 2 夜小幅下调（首夜到次夜的曲线放缓，给玩家留出发育窗口）
 export const NIGHTS = {
   1:  [ { crab: 3 } ],
-  2:  [ { crab: 4, sailor: 2 } ],
-  3:  [ { fish: 6, crab: 2 }, { fish: 6 } ],
-  4:  [ { crab: 4, sailor: 3 }, { fish: 6, sailor: 2 } ],
-  5:  [ { giant: 1, crab: 4 }, { sailor: 3, fish: 5 } ],
-  6:  [ { giant: 1, sailor: 4 }, { fish: 7, crab: 3 } ],
+  2:  [ { crab: 3, sailor: 1 } ],
+  3:  [ { fish: 5, crab: 2 }, { fish: 5 } ],
+  4:  [ { crab: 3, sailor: 2 }, { fish: 5, sailor: 1 } ],
+  5:  [ { giant: 1, crab: 3 }, { sailor: 2, fish: 4 } ],
+  6:  [ { giant: 1, sailor: 3 }, { fish: 6, crab: 2 } ],
   7:  [ { fish: 9 }, { fish: 7, crab: 4 }, { sailor: 4 } ],
-  8:  [ { giant: 2, sailor: 3, fish: 4 }, { crab: 5, sailor: 3 } ],
-  9:  [ { giant: 1, fish: 7 }, { sailor: 5, crab: 4 }, { giant: 1 } ],
+  8:  [ { giant: 1, sailor: 4, fish: 4 }, { crab: 5, sailor: 2 } ],
+  9:  [ { giant: 1, fish: 6 }, { sailor: 5, crab: 4 }, { sailor: 3, fish: 3 } ],
   10: [ { sailor: 4, fish: 5 }, { boss: 1 } ],
 };
 

@@ -45,6 +45,16 @@ export class Game {
       onSelectSeed: (id) => this._selectSeed(id),
       onEndDay: () => this._endDay(),
       onExpand: () => this._buildFarmHint(),
+      onChop: () => {
+        const r = dm.doChop(this.run);
+        if (r.ok) {
+          sfx.plant();
+          this.world.floatText(D.CITY_POSITION.x, 2.6, D.CITY_POSITION.z + 1, `+${r.got}🪵`, 'good');
+          this._spend({ ok: true }, `🪚 伐木 +${r.got}🪵`);
+        } else {
+          this._spend(r);
+        }
+      },
       onGreenhouse: () => this._globalAction(() => dm.doGreenhouse(this.run), '🏡 温室建成：所有作物每日自然成长 +1'),
       onCityUpgrade: () => this._globalAction(() => dm.doCityUpgrade(this.run), '🏠 主城升级成功'),
       onPlantAction: (act, plantId) => this._plantAction(act, plantId),
@@ -68,22 +78,40 @@ export class Game {
   }
 
   newGame() {
-    // V0.3：先让玩家选开局构筑，再据此建局
-    this.ui.showBuildSelect(
-      D.STARTING_BUILDS,
-      (build) => {
-        dm.clearSave();
-        this.run = dm.createRunState(undefined, build.id);
-        this._enterDay(this.run.day, true);
-      },
-      () => this.showTitle(),
-    );
+    // V0.8 开局三步流程：选难度 → 选构筑 → 挑选随身种子（最多 5 种）
+    const pickBuild = (diff) => {
+      this.ui.showBuildSelect(
+        D.STARTING_BUILDS,
+        (build) => {
+          this.ui.showSeedSelect(
+            build,
+            (seedPicks) => {
+              dm.clearSave();
+              this.run = dm.createRunState(undefined, build.id, diff.id, seedPicks);
+              this.world.resetRunViews();   // V0.8：清掉上一局的作物视图，避免跨局串模型
+              this._enterDay(this.run.day, true);
+            },
+            () => pickBuild(diff),          // 返回：重选构筑
+          );
+        },
+        () => pickDifficulty(),             // 返回：重选难度
+      );
+    };
+    const pickDifficulty = () => {
+      this.ui.showDifficultySelect(
+        D.DIFFICULTIES,
+        (diff) => pickBuild(diff),
+        () => this.showTitle(),
+      );
+    };
+    pickDifficulty();
   }
 
   continueGame() {
     const st = dm.loadRun();
     if (!st) { this.newGame(); return; }
     this.run = st;
+    this.world.resetRunViews();   // V0.8：跨局/续档时清空旧作物视图
     this.daySnapshot = dm.snapshot(st);
     this._enterDay(this.run.day, false);
   }
@@ -120,12 +148,6 @@ export class Game {
       { text: '点击荒草地花木材建造农田（自带作物已占地）', done: this.run.tutorial.buildFarm },
       { text: '点击「结束白天」，看作物自动迎战', done: this.run.tutorial.endDay },
     ]);
-  }
-
-  _retryDay() {
-    dm.restore(this.run, this.daySnapshot);
-    this._enterDay(this.run.day, false);
-    this.ui.toast(`🔁 回到第 ${this.run.day} 天白天`, 'info');
   }
 
   _spend(result, successMsg, worldPos) {
@@ -405,6 +427,20 @@ export class Game {
         case 'aoe':
           this.world.burst(ev.x, g(ev.x, ev.z, 0.6), ev.z, '#ffe28a', 12, 3.4, 2.6);
           break;
+        case 'explosion':   // V0.8 玉米炮弹爆炸：冲击环 + 火光
+          this.world.showExplosion(ev.x, ev.z, ev.r);
+          this.world.shake(0.06);
+          break;
+        case 'healPulse':   // V0.8 向日葵治疗脉冲
+          this.world.showHealPulse(ev.x, ev.z);
+          break;
+        case 'melee': {     // V0.8 近战挥击：命中点火花
+          const mx = (ev.x + ev.tx) / 2, mz = (ev.z + ev.tz) / 2;
+          this.world.burst(ev.tx, g(ev.tx, ev.tz, 0.8), ev.tz, '#e8c88a', 4, 1.4, 1.5);
+          sfx.hit();
+          void mx; void mz;
+          break;
+        }
         case 'pierce':
           this.world.burst(ev.x, g(ev.x, ev.z, 0.9), ev.z, '#bdf0ff', 5, 1.6, 1.8);
           break;
@@ -453,6 +489,11 @@ export class Game {
           this.world.setCityBar(this.battle.city.hp, this.battle.city.maxHp);
           this.world.floatText(D.CITY_POSITION.x, g(D.CITY_POSITION.x, D.CITY_POSITION.z, 3.4), D.CITY_POSITION.z, `-${ev.dmg}`, 'dmg');
           sfx.cityHit();
+          // V0.8：城防尖刺反噬 —— 攻城的敌人被扎伤（紫色电花 + 飘字）
+          if (ev.thorns > 0) {
+            this.world.burst(ev.ex, g(ev.ex, ev.ez, 0.9), ev.ez, '#c8a8ff', 6, 1.6, 1.8);
+            this.world.floatText(ev.ex, g(ev.ex, ev.ez, 1.6), ev.ez, `-${ev.thorns}`, 'thorn');
+          }
           break;
         case 'land':
           this.world.burst(ev.x, g(ev.x, D.BEACH_Z, 0.3), D.BEACH_Z, '#cfeeff', 5, 2.0, 1.8);
@@ -488,8 +529,14 @@ export class Game {
     } else {
       sfx.lose();
       this.world.shake(0.5);
+      // V0.8：主城陷落即本局失败 —— 清档，不允许回到当日白天
+      dm.clearSave();
       setTimeout(() => {
-        this.ui.showDefeat(this.run, () => this._retryDay(), () => this.showTitle());
+        this.ui.showDefeat(
+          this.run,
+          () => { this.world.resetRunViews(); this.newGame(); },
+          () => this.showTitle(),
+        );
       }, 1000);
     }
   }

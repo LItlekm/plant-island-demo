@@ -15,7 +15,7 @@ export function mulberry32(seed) {
   };
 }
 
-export function createRunState(seed = (Date.now() & 0xffffffff), buildId = D.STARTING_BUILDS[0].id, difficulty = 'normal') {
+export function createRunState(seed = (Date.now() & 0xffffffff), buildId = D.STARTING_BUILDS[0].id, difficulty = 'normal', seedPicks = null) {
   const build = D.buildById(buildId);
   const st = {
     seed, rngState: seed,
@@ -26,7 +26,11 @@ export function createRunState(seed = (Date.now() & 0xffffffff), buildId = D.STA
     sun: build.sun, materials: build.materials,
     city: { level: 1, hp: D.CITY_LEVELS[1].maxHp, maxHp: D.CITY_LEVELS[1].maxHp, armor: D.CITY_LEVELS[1].armor },
     plants: [], nextPlantId: 1,
-    unlockedSeeds: build.seeds.slice(),   // V0.3：本局种子池完全由构筑决定
+    // V0.8：种子池由玩家在开局时携带（最多 5 种，来自构筑起手作物之外的作物）；
+    // 未提供（旧存档 / 继续）时回落到构筑自带的种子池。
+    unlockedSeeds: Array.isArray(seedPicks) && seedPicks.length
+      ? seedPicks.filter(id => D.CROPS[id]).slice(0, D.MAX_CARRY_SEEDS)
+      : build.seeds.slice(),
     // V0.5：农田改为「放置式」—— farms 是已建成农田的格号集合（无序）。
     //   · 初始为空，随后由起始作物自动落位建造（自带土地）。
     //   · 其余格必须调 canBuildFarm / doBuildFarm 才能变成农田。
@@ -313,6 +317,22 @@ export function doGreenhouse(st) {
   st.greenhoused = true;
   logEvent(st, 'greenhouse', {});
   return { ok: true };
+}
+
+// ---------- V0.8：伐木（1 AP → 固定木材，白天稳定的木材来源） ----------
+export function canChop(st) {
+  if (st.phase !== 'day') return check(false, '只能在白天伐木');
+  if (st.ap < D.ACTION_COST.plant.ap) return check(false, '行动点不足');
+  return check(true);
+}
+export function doChop(st) {
+  const v = canChop(st);
+  if (!v.ok) return v;
+  st.ap -= D.ACTION_COST.plant.ap;
+  const got = D.CHOP_YIELD;
+  st.materials += got;
+  logEvent(st, 'chop', { got });
+  return { ok: true, got };
 }
 
 // ---------- 进化（V0.7：成熟 + 升到 3 级 + 阳光，双方向二选一） ----------

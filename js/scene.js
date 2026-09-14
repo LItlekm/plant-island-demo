@@ -166,6 +166,7 @@ export class World {
     this._buildCity();
     this._buildPlots();
     this._buildWater();
+    this._buildEnvironment();
     this._initParticlePool();
 
     window.addEventListener('resize', () => this._onResize());
@@ -343,6 +344,124 @@ export class World {
     this.foam = foam;
   }
 
+  // ---------- V0.8 环境层：远景岛 / 云 / 海鸥 / 码头 / 灯笼（参考图二的世界观氛围） ----------
+  _buildEnvironment() {
+    const env = new THREE.Group();
+    const hazeMat = new THREE.MeshStandardMaterial({ color: 0x9fc8dd, roughness: 1, flatShading: true });
+
+    // 远景小岛（海平面上 3 座，带棕榈剪影，颜色融入雾气）
+    for (const [x, z, s] of [[-46, 34, 1.4], [38, 46, 1.8], [-30, 58, 1.1], [52, -8, 1.2]]) {
+      const isle = new THREE.Group();
+      const base = mesh(new THREE.ConeGeometry(4.5 * s, 2.2 * s, 9), hazeMat, 0, 0, 0, false);
+      base.position.y = -0.6 * s;
+      isle.add(base);
+      const hill = mesh(new THREE.SphereGeometry(1.6 * s, 7, 5), hazeMat, 0.6 * s, 1.2 * s, 0, false);
+      isle.add(hill);
+      const palmH = 1.3 * s;
+      const trunk = mesh(new THREE.CylinderGeometry(0.06 * s, 0.1 * s, palmH, 5), hazeMat, -0.8 * s, palmH / 2, 0, false);
+      isle.add(trunk);
+      const crown = mesh(new THREE.ConeGeometry(0.5 * s, 0.9 * s, 5), hazeMat, -0.8 * s, palmH + 0.3 * s, 0, false);
+      isle.add(crown);
+      isle.position.set(x, this.waterY + 0.15, z);
+      env.add(isle);
+    }
+
+    // 云（缓慢漂移的白云团）
+    this.clouds = [];
+    const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.92, flatShading: true });
+    for (const [x, y, z, s] of [[-18, 15, -20, 1.6], [14, 17, -8, 2.1], [-6, 13, 18, 1.4], [24, 15, 12, 1.8], [-30, 16, 4, 1.5]]) {
+      const cl = new THREE.Group();
+      for (const [dx, dz, r] of [[0, 0, 1], [1.1, 0.3, 0.75], [-1.0, 0.2, 0.65]]) {
+        const puff = new THREE.Mesh(new THREE.SphereGeometry(r * s, 7, 5), cloudMat);
+        puff.position.set(dx * s, 0, dz * s);
+        puff.scale.y = 0.55;
+        cl.add(puff);
+      }
+      cl.position.set(x, y, z);
+      cl.userData.speed = 0.25 + Math.random() * 0.3;
+      env.add(cl);
+      this.clouds.push(cl);
+    }
+
+    // 海鸥（绕岛盘旋，双翼扇动）
+    this.birds = [];
+    const birdMat = new THREE.MeshBasicMaterial({ color: 0xf4f8fb, side: THREE.DoubleSide });
+    for (let i = 0; i < 4; i++) {
+      const bird = new THREE.Group();
+      const wingL = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.2), birdMat);
+      wingL.position.x = -0.26;
+      const wingR = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.2), birdMat);
+      wingR.position.x = 0.26;
+      bird.add(wingL, wingR);
+      bird.userData = { wingL, wingR, ang: i * 1.7, r: 14 + i * 2.4, h: 8 + i * 1.3, spd: 0.25 + i * 0.05 };
+      env.add(bird);
+      this.birds.push(bird);
+    }
+
+    // 码头：从前排沙滩伸进海里的木板桥 + 系泊小船
+    const dockMat = M(0x9a7248);
+    const dock = new THREE.Group();
+    const plankGeo = new THREE.BoxGeometry(2.2, 0.12, 0.7);
+    for (let i = 0; i < 7; i++) {
+      const plank = mesh(plankGeo, dockMat, 0, 0.55, i * 0.78, false);
+      plank.receiveShadow = true;
+      dock.add(plank);
+    }
+    for (const sx of [-0.9, 0.9]) {
+      for (let i = 0; i < 4; i++) {
+        dock.add(mesh(new THREE.CylinderGeometry(0.07, 0.07, 1.4, 5), M(0x7a5230), sx, -0.1, i * 2.1 - 0.3, false));
+      }
+    }
+    dock.position.set(5.6, 0, D.ISLAND.maxZ - 0.8);
+    dock.rotation.y = 0.12;
+    env.add(dock);
+    // 小船（船体 + 帆）
+    const boat = new THREE.Group();
+    const hull = mesh(new THREE.SphereGeometry(0.7, 7, 5), M(0x8a6642), 0, 0.1, 0, false);
+    hull.scale.set(1.3, 0.45, 0.6);
+    boat.add(hull);
+    const mast = mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.1, 5), M(0x6e4e2e), 0, 0.7, 0, false);
+    boat.add(mast);
+    const sail = mesh(new THREE.PlaneGeometry(0.65, 0.7), new THREE.MeshBasicMaterial({ color: 0xf2ead8, side: THREE.DoubleSide }), 0.3, 0.85, 0, false);
+    boat.add(sail);
+    boat.position.set(7.2, this.waterY + 0.05, 12.6);
+    boat.rotation.y = -0.4;
+    env.add(boat);
+    this.boat = boat;
+
+    // 灯笼：小径两侧的立柱灯（夜晚点亮）
+    this.lanterns = [];
+    const lanternSpots = [[-1.9, 1.0], [1.9, 1.0], [-1.9, 4.6], [1.9, 4.6], [-2.2, -8.0], [2.2, -8.0]];
+    for (const [x, z] of lanternSpots) {
+      const lp = new THREE.Group();
+      lp.add(mesh(new THREE.CylinderGeometry(0.045, 0.06, 0.85, 5), M(0x4a3826), 0, 0.42, 0, false));
+      const bulbMat = new THREE.MeshStandardMaterial({ color: 0xffe2a8, emissive: 0xffc966, emissiveIntensity: 0.25, roughness: 0.4 });
+      const bulb = mesh(new THREE.SphereGeometry(0.11, 6, 5), bulbMat, 0, 0.92, 0, false);
+      lp.add(bulb);
+      const light = new THREE.PointLight(0xffc966, 0.15, 3.2, 2);
+      light.position.y = 1.0;
+      lp.add(light);
+      lp.position.set(x, this.grassTop, z);
+      env.add(lp);
+      this.lanterns.push({ bulb, light });
+    }
+
+    // 主城烟囱炊烟（持续上升的浅色小方块）
+    this.smoke = [];
+    const chim = mesh(new THREE.BoxGeometry(0.34, 0.8, 0.34), M(0xb8a89a), -1.0, 2.35, -0.4, false);
+    this.cityGroup.add(chim);
+    for (let i = 0; i < 5; i++) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(0.14 + i * 0.03, 6, 5),
+        new THREE.MeshBasicMaterial({ color: 0xf0ede6, transparent: true, opacity: 0 }));
+      m.position.set(-1.0, 2.9 + i * 0.35, -0.4);
+      this.cityGroup.add(m);
+      this.smoke.push({ mesh: m, t: i / 5 });
+    }
+
+    this.scene.add(env);
+    this.env = env;
+  }
+
   // ---------- 主城 ----------
   _buildCity() {
     const g = new THREE.Group();
@@ -393,6 +512,25 @@ export class World {
     g.scale.setScalar(1.35);
     this.cityGroup = g;
     this.scene.add(g);
+
+    // V0.8：主城专用拾取盒（只有底层一小块参与射线检测）——
+    // 此前整个城体（含大屋顶）都拦截射线，导致主城后方两格农田几乎点不到。
+    const pickBox = new THREE.Mesh(
+      new THREE.BoxGeometry(3.4, 1.4, 2.4),
+      new THREE.MeshBasicMaterial({ visible: false }));
+    pickBox.position.set(x, this.grassTop + 0.7, z + 0.4);
+    pickBox.userData.isCityPick = true;
+    this.scene.add(pickBox);
+    this.cityPick = pickBox;
+  }
+
+  // V0.8：新开局时清空上一局的作物视图缓存。
+  // 修复：plantViews 以每局从 1 重新计数的 plant.id 为键，跨局残留会让
+  // 新构筑的作物复用旧模型（"豌豆射手显示成向日葵"的根因）。
+  resetRunViews() {
+    for (const [, v] of this.plantViews) this.cropRoot.remove(v.group);
+    this.plantViews.clear();
+    this.clearBattleViews();
   }
 
   setCityLevel(level) {
@@ -417,6 +555,13 @@ export class World {
       const inner = mesh(new THREE.BoxGeometry(side - 0.45, 0.14, side - 0.45),
         M(0x7d4c26), 0, 0.25, 0, false);
       g.add(inner);
+      // V0.8：犁沟条纹（参考图二的田垄质感）
+      const furrows = [];
+      for (let f = -1; f <= 1; f++) {
+        const furrow = mesh(new THREE.BoxGeometry(side - 0.5, 0.05, 0.16), M(0x5e3a1e), 0, 0.3, f * (side / 3.4), false);
+        g.add(furrow);
+        furrows.push(furrow);
+      }
 
       // 未建成：颜色更浅的"待开垦"荒地（比草地亮、比土块亮得多，一眼可辨）
       const ghost = new THREE.Mesh(
@@ -450,7 +595,7 @@ export class World {
       g.add(costTag);
 
       g.position.set(pos.x, y, pos.z);
-      g.userData = { plotIndex: i, soil, inner, ghost, costTag, posts, baseMat: soil.material };
+      g.userData = { plotIndex: i, soil, inner, furrows, ghost, costTag, posts, baseMat: soil.material };
       this.plotRoot.add(g);
       this.plotMeshes.push(g);
     });
@@ -468,6 +613,7 @@ export class World {
       g.userData.costTag.visible = !b;
       g.userData.soil.visible = b;
       g.userData.inner.visible = b;
+      for (const fr of g.userData.furrows) fr.visible = b;
       for (const post of g.userData.posts) post.visible = !b;
     });
   }
@@ -485,10 +631,18 @@ export class World {
         if (full) {
           const head = new THREE.Group();
           head.add(mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.14, 10), M(0x7a4a21), 0, 0, 0));
-          for (let i = 0; i < 10; i++) {
-            const a = (i / 10) * Math.PI * 2;
+          // V0.8：向日葵的笑脸（参考图三的萌系表情）
+          for (const sx of [-0.09, 0.09]) {
+            head.add(mesh(new THREE.SphereGeometry(0.032, 5, 4), M(0x2b2013), sx, 0.05, 0.075));
+          }
+          const smile = mesh(new THREE.TorusGeometry(0.07, 0.014, 5, 10, Math.PI), M(0x2b2013), 0, -0.03, 0.075);
+          smile.rotation.x = Math.PI;
+          head.add(smile);
+          for (let i = 0; i < 12; i++) {
+            const a = (i / 12) * Math.PI * 2;
             const petal = mesh(new THREE.SphereGeometry(0.09, 5, 4), M(evolved ? 0xffe066 : 0xffd23f), Math.cos(a) * 0.3, Math.sin(a) * 0.3, 0);
             petal.scale.set(1.6, 0.8, 0.5);
+            petal.rotation.z = a + Math.PI / 2;
             head.add(petal);
           }
           head.position.set(0, 0.95, 0.02);
@@ -507,6 +661,11 @@ export class World {
           const snout = mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.42, 8), M(0x3d8a3a), 0, 0.78, 0.3);
           snout.rotation.x = Math.PI / 2;
           g.add(snout);
+          // V0.8：炮口深色开口 + 眼睛（参考图三的豌豆射手形象）
+          snout.add(mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.03, 8), M(0x1e3d1c), 0, 0, 0.21));
+          for (const sx of [-0.1, 0.1]) {
+            g.add(mesh(new THREE.SphereGeometry(0.038, 5, 4), M(0x1c2b1a), sx, 0.86, 0.24));
+          }
           g.userData.head = head;
           g.userData.snout = snout;
         }
@@ -546,21 +705,24 @@ export class World {
       }
       // ---------- V0.7：四个原创作物 ----------
       else if (defId === 'arcvine') {
-        // 弧光藤：藤蔓 + 顶端发光电弧球
-        g.add(mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.8, 6), M(0x2f7a4a), 0, 0.4, 0));
+        // 弧光藤（V0.8 参考图三改为紫藤配色）：藤蔓 + 顶端发光电弧球
+        g.add(mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.8, 6), M(0x6a55b0), 0, 0.4, 0));
         for (const s of [-1, 1]) {
-          const t = mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.5, 5), M(0x2f7a4a), s * 0.16, 0.5, 0);
+          const t = mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.5, 5), M(0x5a48a0), s * 0.16, 0.5, 0);
           t.rotation.z = s * 0.7;
           g.add(t);
         }
+        const curl = mesh(new THREE.TorusGeometry(0.12, 0.025, 5, 12, Math.PI * 1.5), M(0x6a55b0), 0.2, 0.78, 0);
+        curl.rotation.x = Math.PI / 2;
+        g.add(curl);
         if (full) {
           const bulb = mesh(new THREE.SphereGeometry(0.22, 8, 6),
-            new THREE.MeshStandardMaterial({ color: 0x9fdcff, emissive: 0x2f8fd8, emissiveIntensity: 1.2, roughness: 0.3 }), 0, 0.92, 0);
+            new THREE.MeshStandardMaterial({ color: 0xc9b2ff, emissive: 0x7a5ae0, emissiveIntensity: 1.2, roughness: 0.3 }), 0, 0.92, 0);
           g.add(bulb);
           g.userData.head = bulb;
           for (let i = 0; i < 3; i++) {
             const a = (i / 3) * Math.PI * 2;
-            g.add(mesh(new THREE.SphereGeometry(0.05, 5, 4), new THREE.MeshBasicMaterial({ color: 0xbfe9ff }),
+            g.add(mesh(new THREE.SphereGeometry(0.05, 5, 4), new THREE.MeshBasicMaterial({ color: 0xd8c8ff }),
               Math.cos(a) * 0.3, 0.92 + Math.sin(a) * 0.1, Math.sin(a) * 0.3));
           }
         }
@@ -578,21 +740,32 @@ export class World {
           g.add(mesh(new THREE.SphereGeometry(0.2, 7, 5), M(0xb8598f), 0, 0.5, 0));
         }
       } else if (defId === 'timberwood') {
-        // 丰穣木：粗壮树干 + 针叶树冠 + 年轮环
-        g.add(mesh(new THREE.CylinderGeometry(0.14, 0.2, 0.7, 7), M(0x7a5230), 0, 0.35, 0));
+        // 丰穣木（V0.8 参考图三改为横置原木造型）：带年轮端面的圆木 + 短枝手臂
+        const log = mesh(new THREE.CylinderGeometry(0.26, 0.26, 1.0, 9), M(0x8a5a30), 0, 0.3, 0);
+        log.rotation.z = Math.PI / 2;
+        g.add(log);
+        const ring = mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.03, 9),
+          new THREE.MeshStandardMaterial({ color: 0xd9b98a, roughness: 0.9, flatShading: true }), -0.51, 0.3, 0);
+        ring.rotation.z = Math.PI / 2;
+        g.add(ring);
+        for (const s of [-1, 1]) {
+          const arm = mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.42, 5), M(0x7a5230), s * 0.28, 0.52, 0);
+          arm.rotation.z = s * 0.9;
+          g.add(arm);
+        }
         if (full) {
-          const crown = mesh(new THREE.ConeGeometry(0.5, 0.9, 7), M(0x3f9142), 0, 1.1, 0);
+          const crown = mesh(new THREE.SphereGeometry(0.3, 7, 5), M(0x4fa352), 0.1, 0.62, 0);
           g.add(crown);
           g.userData.head = crown;
-          g.add(mesh(new THREE.SphereGeometry(0.3, 7, 5), M(0x4fa352), 0.18, 0.8, 0.1));
-          const band = mesh(new THREE.TorusGeometry(0.16, 0.03, 5, 12), M(0x5e3f22), 0, 0.55, 0);
+          for (const sx of [-0.1, 0.1]) {
+            g.add(mesh(new THREE.SphereGeometry(0.035, 5, 4), M(0x2b2013), sx * 3, 0.34, 0.26));
+          }
+          const band = mesh(new THREE.TorusGeometry(0.27, 0.035, 5, 12), M(0x5e3f22), 0, 0.3, 0);
           band.rotation.x = Math.PI / 2;
           g.add(band);
-        } else {
-          g.add(mesh(new THREE.SphereGeometry(0.22, 7, 5), M(0x3f9142), 0, 0.75, 0));
         }
       } else if (defId === 'gustgrass') {
-        // 风灵草：细长草叶丛 + 白色风绒球
+        // 风灵草：细长草叶丛 + 白色风绒球 + 微型旋风（参考图三的龙卷造型）
         for (let i = 0; i < 5; i++) {
           const a = (i / 5) * Math.PI * 2;
           const blade = mesh(new THREE.ConeGeometry(0.045, 0.6 + (i % 2) * 0.18, 5), M(0x6fbf6a), Math.cos(a) * 0.1, 0.3, Math.sin(a) * 0.1);
@@ -605,10 +778,16 @@ export class World {
             new THREE.MeshStandardMaterial({ color: 0xf2f7ff, roughness: 0.6, transparent: true, opacity: 0.9 }), 0, 0.85, 0);
           g.add(puff);
           g.userData.head = puff;
-          for (let i = 0; i < 6; i++) {
-            const a = (i / 6) * Math.PI * 2;
-            g.add(mesh(new THREE.SphereGeometry(0.025, 4, 3), M(0xffffff), Math.cos(a) * 0.24, 0.85, Math.sin(a) * 0.24));
+          // 微型旋风：三层逐渐收窄的半透明环带，待机时旋转
+          const tornado = new THREE.Group();
+          for (let i = 0; i < 3; i++) {
+            const band = mesh(new THREE.TorusGeometry(0.2 - i * 0.045, 0.03, 5, 14),
+              new THREE.MeshBasicMaterial({ color: 0xdff2ff, transparent: true, opacity: 0.55 }), 0, 0.35 + i * 0.14, 0);
+            band.rotation.x = Math.PI / 2;
+            tornado.add(band);
           }
+          g.add(tornado);
+          g.userData.tornado = tornado;
         }
       }
       if (evolved && full) {
@@ -891,12 +1070,43 @@ export class World {
     // 主城旗帜
     if (this.flag) this.flag.rotation.y = Math.sin(t * 3) * 0.2;
 
+    // V0.8 环境动画：云漂移 / 海鸥盘旋 / 炊烟 / 灯笼 / 小船
+    for (const cl of this.clouds || []) {
+      cl.position.x += cl.userData.speed * dt;
+      if (cl.position.x > 46) cl.position.x = -46;
+    }
+    for (const bd of this.birds || []) {
+      const u2 = bd.userData;
+      u2.ang += u2.spd * dt;
+      bd.position.set(Math.cos(u2.ang) * u2.r, u2.h + Math.sin(t * 0.7 + u2.ang) * 0.4, Math.sin(u2.ang) * u2.r + 1);
+      bd.rotation.y = -u2.ang + Math.PI / 2;
+      const flap = Math.sin(t * 7 + u2.ang) * 0.5;
+      u2.wingL.rotation.z = flap; u2.wingR.rotation.z = -flap;
+    }
+    for (const sm of this.smoke || []) {
+      sm.t += dt * 0.35;
+      if (sm.t > 1) sm.t = 0;
+      sm.mesh.position.y = 2.9 + sm.t * 1.6;
+      sm.mesh.position.x = -1.0 + Math.sin(t * 0.8 + sm.t * 4) * 0.12 * sm.t;
+      sm.mesh.material.opacity = 0.35 * (1 - sm.t) * Math.min(1, sm.t * 4);
+    }
+    for (const bt of this.lanterns || []) {
+      const glow = 0.25 + this.nightFactor * 1.6;
+      bt.light.intensity = glow;
+      bt.bulb.material.emissiveIntensity = 0.25 + this.nightFactor * 1.4;
+    }
+    if (this.boat) {
+      this.boat.position.y = this.waterY + 0.05 + Math.sin(t * 1.1) * 0.07;
+      this.boat.rotation.z = Math.sin(t * 0.9) * 0.045;
+    }
+
     // 作物待机摇摆
     for (const [, v] of this.plantViews) {
       const g = v.group;
       g.rotation.z = Math.sin(t * 1.6 + g.position.x) * 0.035;
       if (g.userData.head) g.userData.head.rotation.y = Math.sin(t * 0.8 + g.position.z) * 0.12;
       if (g.userData.ring) g.userData.ring.rotation.z = t * 1.2;
+      if (g.userData.tornado) g.userData.tornado.rotation.y = t * 2.5;
       if (g.userData.readyIcon) g.userData.readyIcon.position.y = 1.75 + Math.sin(t * 3 + g.position.x) * 0.08;
     }
     this.processPops(dt);
@@ -1012,6 +1222,13 @@ export class World {
       const gy = this.groundY(v.group.position.x, v.group.position.z) + 0.55;
       v.group.position.y = gy + Math.abs(Math.sin(this.time * 2 + u.id)) * 0.03;
       v.group.rotation.z = Math.sin(this.time * 2.2 + u.id) * 0.03;
+      // V0.8：近战作物攻击时朝目标方向前倾一记（有"打出去"的力度感）
+      if ((u.attackAnim || 0) > 0.5) {
+        v.group.rotation.x = -0.35 * (u.attackAnim - 0.5) * 2;
+      } else if (v._lunge) {
+        v.group.rotation.x = 0;
+      }
+      v._lunge = (u.attackAnim || 0) > 0.5;
       // 受击闪红
       if (u.hitFlash > 0.05) {
         v.group.traverse(o => { if (o.isMesh && o.material.emissive && !o.userData.flashed) { o.material = o.material.clone(); o.material.emissive.setHex(0xaa2200); o.userData.flashed = true; } });
@@ -1070,12 +1287,13 @@ export class World {
       if (Math.hypot(dx, dz) > 0.001) v.group.rotation.y = Math.atan2(dx, dz);
       e._lastX = e.x; e._lastZ = e.z;
       // 动画（在贴地高度上叠加弹跳/起伏，绝对赋值避免累积漂移）
-      const walkPhase = this.time * (e.type === 'fish' ? 9 : 6) + e.id;
+      // V0.8：鱼群不再"飞天"——贴地小步蹦跶（低幅度、低频率），Boss 悬浮高度减半
+      const walkPhase = this.time * (e.type === 'fish' ? 6 : 6) + e.id;
       if (e.type === 'fish') {
-        v.group.position.y = baseY + Math.abs(Math.sin(walkPhase)) * 0.22;
-        v.group.rotation.z = Math.sin(walkPhase) * 0.15;
+        v.group.position.y = baseY + Math.abs(Math.sin(walkPhase)) * 0.06;
+        v.group.rotation.z = Math.sin(walkPhase) * 0.08;
       } else if (e.type === 'boss') {
-        v.group.position.y = baseY + 0.12 + Math.sin(this.time * 2) * 0.08;
+        v.group.position.y = baseY + 0.03 + Math.sin(this.time * 2) * 0.035;
         v.group.rotation.y = Math.sin(this.time * 1.2) * 0.15;
       } else {
         v.group.position.y = baseY;
@@ -1108,8 +1326,10 @@ export class World {
       let v = [...this.projViews].find(pv => pv.proj === pr);
       if (!v) {
         const isCorn = pr.kind === 'corn';
+        // V0.8：弹幕尺寸由战斗层给出（巨弹豌豆明显更大、高攻弹丸更大）
+        const r = pr.size || (isCorn ? 0.17 : 0.11);
         const m = new THREE.Mesh(
-          new THREE.SphereGeometry(isCorn ? 0.17 : 0.11, 6, 5),
+          new THREE.SphereGeometry(r, 8, 6),
           new THREE.MeshBasicMaterial({ color: isCorn ? 0xffd94d : 0x8be86a }));
         this.fxRoot.add(m);
         v = { mesh: m, proj: pr };
@@ -1127,6 +1347,34 @@ export class World {
         this.projViews.delete(v);
       }
     }
+  }
+
+  // ---------- V0.8：战斗特效 ----------
+  // 爆炸：橙色冲击环 + 火光粒子（玉米炮弹 / 巨弹溅射）
+  showExplosion(x, z, r) {
+    const geo = new THREE.RingGeometry(r * 0.25, r * 0.55, 26);
+    geo.rotateX(-Math.PI / 2);
+    const ring = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0xffb24d, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false,
+    }));
+    ring.position.set(x, this.groundY(x, z) + 0.12, z);
+    this.fxRoot.add(ring);
+    this.gustRings.push({ ring, life: 0.32, r });
+    this.burst(x, this.groundY(x, z) + 0.5, z, '#ffb24d', 12, 3.0, 3.0);
+    this.burst(x, this.groundY(x, z) + 0.3, z, '#ff7a3d', 8, 2.2, 2.6);
+  }
+
+  // 向日葵治疗脉冲：绿色治愈环从花底扩散
+  showHealPulse(x, z) {
+    const geo = new THREE.RingGeometry(0.3, 0.55, 26);
+    geo.rotateX(-Math.PI / 2);
+    const ring = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: 0x8ef0a0, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false,
+    }));
+    ring.position.set(x, this.groundY(x, z) + 0.15, z);
+    this.fxRoot.add(ring);
+    this.gustRings.push({ ring, life: 0.45, r: 3.2 });
+    this.burst(x, this.groundY(x, z) + 1.0, z, '#8ef0a0', 6, 1.6, 1.8);
   }
 
   clearBattleViews() {
@@ -1169,14 +1417,15 @@ export class World {
     const targets = [];
     for (const g of this.plotMeshes) targets.push(g);
     for (const [, v] of this.plantViews) targets.push(v.group);
-    targets.push(this.cityGroup);
+    // V0.8：主城只通过小型拾取盒响应点击（大屋顶不再拦截后方农田的射线）
+    targets.push(this.cityPick);
     const hits = this.raycaster.intersectObjects(targets, true);
     for (const h of hits) {
       let o = h.object;
       while (o) {
         if (o.userData && o.userData.plotIndex !== undefined) return { type: 'plot', index: o.userData.plotIndex };
         if (o.userData && o.userData.plantId !== undefined) return { type: 'crop', plantId: o.userData.plantId };
-        if (o === this.cityGroup) return { type: 'city' };
+        if (o.userData && o.userData.isCityPick) return { type: 'city' };
         o = o.parent;
       }
     }
