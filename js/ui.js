@@ -3,8 +3,9 @@
 // 只做展示与输入转发；规则判断在领域层。
 // ============================================================
 import * as D from './data.js';
+import * as dm from './domain.js';
 
-const RESOURCE_ICONS = { sun: '☀️', loot: '🪙', materials: '🪵' };
+const RESOURCE_ICONS = { sun: '☀️', materials: '🪵' };
 
 export class UI {
   constructor(root, cb) {
@@ -19,7 +20,7 @@ export class UI {
         </div>
         <div class="hud-top-right panel">
           <span class="res" id="res-sun" title="阳光：种植、升级、进化与主城升级的资源；击杀敌人与夜间胜利获得">☀️ <b>0</b></span>
-          <span class="res" id="res-mat" title="木材（岛屿材料）：波次结算获得，用于扩张与岛屿强化">🪵 <b>0</b></span>
+          <span class="res" id="res-mat" title="木材：收割成熟作战作物 + 夜战结算获得。用于在荒草地上建造农田、以及岛屿强化">🪵 <b>0</b></span>
           <button id="btn-mute" class="icon-btn" title="音效开关">🔊</button>
           <button id="btn-help" class="icon-btn" title="玩法说明">❓</button>
         </div>
@@ -243,23 +244,26 @@ export class UI {
       btn.onclick = () => { this.cb.onSelectSeed(seedId); };
       list.appendChild(btn);
     }
-    const nextUnlocks = Object.entries(D.CROPS).filter(([id, c]) => !run.unlockedSeeds.includes(id));
-    if (nextUnlocks.length) {
-      const c = nextUnlocks[0][1];
-      const hint = document.createElement('span');
-      hint.className = 'seed-locked-hint';
-      hint.textContent = `${c.icon}${c.name} 第${c.unlockDay}天解锁`;
-      list.appendChild(hint);
-    }
+    const buildInfo = D.buildById(run.buildId);
+    const hint = document.createElement('span');
+    hint.className = 'seed-locked-hint';
+    hint.textContent = `本局构筑：${buildInfo.name}｜种子池 ${run.unlockedSeeds.length} 种`;
+    list.appendChild(hint);
     // 全局行动
-    const expandIdx = Math.max(0, (run._plotsUnlocked ?? D.INITIAL_PLOTS) - D.INITIAL_PLOTS);
-    const expandCost = D.ACTION_COST.expand.materialsByCount[expandIdx];
-    const expandOk = run.features.expand && (run._plotsUnlocked ?? D.INITIAL_PLOTS) < D.PLOT_POSITIONS.length && expandCost != null;
-    this._$('btn-expand').innerHTML = `扩张农田<small>2AP + ${expandCost}🪵</small>`;
-    this._$('btn-expand').disabled = !expandOk;
-    this._$('btn-expand').title = expandOk ? '解锁 1 格新农田' : (run.features.expand ? '农田已达上限' : '第 3 天解锁');
+    // V0.5：建造农田改为"放置式"——按钮只负责提示玩法，真正的建造发生在点击荒草地
+    const farmsNow = dm.plotsUnlocked(run);
+    const expandCost = D.plotBuildCost(farmsNow);
+    const leftTiles = dm.buildableTiles(run).length;
+    const atCap = leftTiles === 0;
+    const anyOk = dm.canBuildAnyFarm(run);
+    const lackWood = !atCap && run.materials < expandCost;
+    this._$('btn-expand').innerHTML = `建造农田<small class="${lackWood ? 'lack' : ''}">${D.ACTION_COST.expand.ap}AP + ${expandCost}🪵</small>`;
+    this._$('btn-expand').disabled = !anyOk.ok;
+    this._$('btn-expand').title = atCap ? '12 格农田已全部建成'
+      : lackWood ? `木材不足：现有 ${run.materials}🪵，需要 ${expandCost}🪵（收割成熟作物可获得木材）`
+      : `点击任意一格荒草地即可建造农田（还剩 ${leftTiles} 格）`;
     const ghOk = run.features.greenhouse && !run.greenhoused;
-    this._$('btn-greenhouse').innerHTML = `温室<small>2AP + 40🪵</small>`;
+    this._$('btn-greenhouse').innerHTML = `温室<small>${D.ACTION_COST.greenhouse.ap}AP + ${D.ACTION_COST.greenhouse.materials}🪵</small>`;
     this._$('btn-greenhouse').disabled = !ghOk;
     this._$('btn-greenhouse').title = ghOk ? '建造后所有作物每日自然成长 +1' : (run.features.greenhouse ? '已建造' : '第 8 天解锁');
     const cuCost = D.ACTION_COST.cityUpgrade.sunByLevel[run.city.level + 1];
@@ -289,8 +293,8 @@ export class UI {
       <div class="pp-row">成长 ${stage} <span class="bar"><div class="fill grow-fill" style="width:${(p.growth / def.maturityDays) * 100}%"></div></span> ${p.growth}/${def.maturityDays}</div>
       <div class="pp-row dim">生命 ${this._plantHp(def, p)} ｜ ${def.attack > 0 ? `攻击 ${this._plantAtk(def, p)} · 间隔 ${def.attackInterval}s · 射程 ${def.range}` : (def.id === 'sunflower' ? `每日 +${this._plantSun(def, p, run)}☀️` : '嘲讽承伤')}</div>
       <div class="pp-btns">
-        ${stage !== '成熟' ? btn('cultivate', '💧 培育', `+${'1'} 成长`, actions.cultivate) : ''}
-        ${stage === '成熟' ? btn('harvest', def.id === 'sunflower' ? `🧺 收获 +${this._plantHarvest(def, p, run)}☀️` : '🧺 收获(移除)', '1 AP', actions.harvest) : ''}
+        ${stage !== '成熟' ? btn('cultivate', '💧 培育', `+${this._cultivateGain(run)} 成长`, actions.cultivate) : ''}
+        ${stage === '成熟' ? btn('harvest', this._harvestLabel(def, p, run), '1 AP', actions.harvest) : ''}
         ${stage === '成熟' && p.level < 3 ? btn('upgrade', '⬆ 升级', `${this._apLabel(ap.upgrade.ap)}${actions.upgrade.costLabel}☀️`, actions.upgrade, 'gold') : ''}
         ${stage === '成熟' && !p.evolved ? btn('evolve', `🧬 进化（二选一）`, actions.evolve.ok ? `${branches[0].cost}☀️ 起` : actions.evolve.reason, actions.evolve, 'gold') : ''}
       </div>
@@ -357,6 +361,21 @@ export class UI {
     if (e.harvestSun) v += e.harvestSun;
     return Math.round(v * (1 + run.mod.sunMul));
   }
+  // V0.4：培育成长量（修复原先硬编码 +1，实际受根系网络 / 生长流加成影响）
+  _cultivateGain(run) {
+    return 1 + (run.mod?.cultivateBonus || 0);
+  }
+  // V0.4：收割产物文案（向日葵 → 阳光；战斗作物 → 木材）
+  _harvestLabel(def, p, run) {
+    const sun = this._plantHarvest(def, p, run);
+    const mats = def.harvestMaterials
+      ? def.harvestMaterials + Math.round(def.harvestMaterials * 0.15 * (p.level - 1))
+      : 0;
+    const parts = [];
+    if (sun > 0) parts.push(`+${sun}☀️`);
+    if (mats > 0) parts.push(`+${mats}🪵`);
+    return `🧺 收获 ${parts.join(' ')}`;
+  }
 
   showCityPanel(run) {
     const next = run.city.level < 3 ? D.ACTION_COST.cityUpgrade.sunByLevel[run.city.level + 1] : null;
@@ -393,9 +412,8 @@ export class UI {
     const fc = D.THREAT_FORECASTS[run.day];
     const script = D.DAY_SCRIPT[run.day] || {};
     const unlocks = [
-      ...(script.unlocks || []).map(id => `🌱 新种子：<b>${D.CROPS[id].name}</b>`),
       ...(script.unlockFeatures || []).map(f => ({
-        expand: '🪓 解锁：<b>农田扩张</b>', pick3: '🎲 解锁：<b>夜后三选一</b>',
+        expand: '🪓 解锁：<b>建造农田</b>', pick3: '🎲 解锁：<b>夜后三选一</b>',
         evolve: '🧬 解锁：<b>进化系统</b>', greenhouse: '🏡 解锁：<b>温室（岛屿强化）</b>',
       }[f])),
       ...(script.notes || []),
@@ -474,6 +492,33 @@ export class UI {
     });
   }
 
+  // ---------- 开局构筑选择（V0.3） ----------
+  showBuildSelect(builds, onPick, onCancel) {
+    const cards = builds.map((b, i) => {
+      const plants = b.plants.map(id => `${D.CROPS[id].icon}${D.CROPS[id].name}`).join(' ＋ ');
+      return `
+      <button class="pick-card build-card" data-idx="${i}">
+        <div class="pc-icon">${b.icon}</div>
+        <div class="pc-name">${b.name}</div>
+        <div class="pc-tag">${b.tagline}</div>
+        <div class="pc-desc">${b.desc}</div>
+        <div class="pc-stat">起手　${plants}</div>
+        <div class="pc-stat">资源　☀️${b.sun} · 🪵${b.materials} · 自带${b.plants.length}格农田</div>
+        <div class="pc-cost">${b.perk.label}</div>
+      </button>`;
+    }).join('');
+    const overlay = this.modal({
+      title: '🌱 选择开局构筑',
+      body: `<div class="dim">构筑决定起始作物、本局种子池、初始资源与专属特性。选定后本局内不可更换。</div>
+        <div class="pick-grid">${cards}</div>`,
+      buttons: onCancel ? [{ label: '返回标题', onClick: () => { this.closeModal(); onCancel(); } }] : [],
+      wide: true,
+    });
+    overlay.querySelectorAll('.pick-card').forEach(btn => {
+      btn.onclick = () => { this.closeModal(); onPick(builds[Number(btn.dataset.idx)]); };
+    });
+  }
+
   // ---------- 失败 / 胜利 ----------
   showDefeat(run, onRetry, onTitle) {
     this.modal({
@@ -527,7 +572,7 @@ export class UI {
       title: '❓ 玩法说明',
       body: `
         <div class="help-grid">
-          <div><b>☀️ 白天（8 行动点）</b><br>种植 1AP · 培育 1AP（+1成长）· 收获 1AP<br>升级 0AP+阳光（最高3级）· 扩张 2AP+木材<br>点地块/作物操作，点主城升级城防。</div>
+          <div><b>☀️ 白天（8 行动点）</b><br>种植 1AP · 培育 1AP（+1成长）· 收获 1AP<br>升级 0AP+阳光（最高3级）· 建造农田 1AP+木材🪵<br>建造 = 点击任意一格荒草地，农田立刻放上去<br>收割作战作物可获得木材🪵<br>点地块/作物操作，点主城升级城防。</div>
           <div><b>🌙 夜晚（自动战斗）</b><br>成熟作物自动进入防守阵列：<br>坚果嘲讽承伤，豌豆/玉米远程输出。<br>清空敌人即胜；主城破则当日重试。</div>
           <div><b>🧬 进化与成长</b><br>成熟作物可花费阳光进化，每类二选一：<br>豌豆：巨弹溅射 / 连射；坚果：铁甲 / 尖刺反伤<br>向日葵：光耀产阳 / 翠光治疗；玉米：冰霜定身 / 爆裂。<br>同标签 2/3/4 株激活流派羁绊（顶部可查看）。</div>
           <div><b>🎥 视角与十天目标</b><br>滚轮缩放视角；按住右键拖动移动视角。<br>资源只有阳光☀️与木材🪵。<br>每天早上看威胁预告，第 10 夜击败 Boss。</div>

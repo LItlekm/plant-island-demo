@@ -9,6 +9,7 @@ const C = {
   daySky: 0x8ec9ef, nightSky: 0x0d1330,
   dayFog: 0xa8d4ee, nightFog: 0x101838,
   sand: 0xe6d294, grass: 0x69b04b, grass2: 0x5c9c42, dirt: 0xc09a62,
+  waste: 0xb8c877,      // 未开垦的荒草地（比草地明显更浅，保证 4×4 网格一眼可辨）
   soil: 0x8a5a33, soilDark: 0x6e4526,
   water: 0x2a8fbd, waterNight: 0x143a66,
   trunk: 0x8a6642, leaf: 0x3f9142,
@@ -28,6 +29,44 @@ function mesh(geo, mat, x = 0, y = 0, z = 0, cast = true) {
   m.position.set(x, y, z);
   m.castShadow = cast; m.receiveShadow = true;
   return m;
+}
+// V0.5：圆角矩形形状（岛屿底盘用），返回 XY 平面的 THREE.Shape
+function roundedRect(hw, hh, r) {
+  const s = new THREE.Shape();
+  const rr = Math.min(r, hw, hh);
+  s.moveTo(-hw + rr, -hh);
+  s.lineTo(hw - rr, -hh);
+  s.quadraticCurveTo(hw, -hh, hw, -hh + rr);
+  s.lineTo(hw, hh - rr);
+  s.quadraticCurveTo(hw, hh, hw - rr, hh);
+  s.lineTo(-hw + rr, hh);
+  s.quadraticCurveTo(-hw, hh, -hw, hh - rr);
+  s.lineTo(-hw, -hh + rr);
+  s.quadraticCurveTo(-hw, -hh, -hw + rr, -hh);
+  return s;
+}
+
+// V0.5：圆角矩形"环"（海岸泡沫用）：外圈矩形挖掉内圈。
+// 坑：ShapeGeometry 的 hole 必须与外形**绕向相反**，直接用 getPoints() 会得到
+//     自相交的破面（渲染成白色乱带）。这里显式反向绘制内圈路径。
+function roundedRectRing(hwO, hhO, rO, hwI, hhI, rI) {
+  const s = roundedRect(hwO, hhO, rO);
+  const hole = new THREE.Path();
+  const rr = Math.min(rI, hwI, hhI);
+  // 反向（顺时针）绘制内圈
+  hole.moveTo(-hwI + rr, hhI);
+  hole.lineTo(-hwI + rr, -hhI);
+  hole.quadraticCurveTo(-hwI, -hhI, -hwI, -hhI + rr);
+  hole.lineTo(-hwI, hhI - rr);
+  hole.quadraticCurveTo(-hwI, hhI, -hwI + rr, hhI);
+  hole.lineTo(hwI - rr, hhI);
+  hole.quadraticCurveTo(hwI, hhI, hwI, hhI - rr);
+  hole.lineTo(hwI, -hhI + rr);
+  hole.quadraticCurveTo(hwI, -hhI, hwI - rr, -hhI);
+  hole.lineTo(-hwI + rr, -hhI);
+  hole.closePath();
+  s.holes.push(hole);
+  return s;
 }
 
 // ---------- 画布精灵（血条 / 图标） ----------
@@ -87,9 +126,10 @@ export class World {
     this.scene.background = new THREE.Color(C.daySky);
     this.scene.fog = new THREE.Fog(C.dayFog, 34, 90);
 
-    this.camera = new THREE.PerspectiveCamera(42, container.clientWidth / container.clientHeight, 0.1, 200);
-    this.camTarget = new THREE.Vector3(0, 0.2, -0.6);
-    this.baseCamOffset = new THREE.Vector3(0, 13.6, 17.4); // 相机相对视点的基础偏移
+    this.camera = new THREE.PerspectiveCamera(42, container.clientWidth / container.clientHeight, 0.1, 240);
+    // V0.5：视点落在岛屿几何中心（含前排战斗区），把 4×4 农田 + 沙滩防线一起框进画面
+    this.camTarget = new THREE.Vector3(0, 0.2, -1.8);
+    this.baseCamOffset = new THREE.Vector3(0, 27.0, 32.0);  // 相机相对视点的基础偏移
     this.camDist = 1.0; this.camDistTarget = 1.0;          // 缩放系数
     this.camera.position.copy(this.camTarget).add(this.baseCamOffset);
     this.camera.lookAt(this.camTarget);
@@ -101,6 +141,7 @@ export class World {
 
     this.nightFactor = 0; this.nightTarget = 0;
     this.time = 0;
+    this.grassTop = 1.32;           // 草地顶面高度（_buildIsland 里会刷新，这里给个默认值）
 
     // 视图注册表与根组（需先于构建函数初始化）
     this.plotMeshes = [];           // 12 个地块网格
@@ -175,9 +216,9 @@ export class World {
     const k = 0.0026 * this.camDist * this.baseCamOffset.length();
     this.camTarget.addScaledVector(right, -dx * k);
     this.camTarget.addScaledVector(fwd, dy * k);
-    // 地图边界限制
-    this.camTarget.x = Math.max(-15, Math.min(15, this.camTarget.x));
-    this.camTarget.z = Math.max(-13, Math.min(10, this.camTarget.z));
+    // 地图边界限制（V0.5：新岛更"高"，纵向范围相应放宽）
+    this.camTarget.x = Math.max(-16, Math.min(16, this.camTarget.x));
+    this.camTarget.z = Math.max(-15, Math.min(12, this.camTarget.z));
   }
 
   // ---------- 灯光 ----------
@@ -188,7 +229,7 @@ export class World {
     this.sun.position.set(9, 16, 7);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
-    Object.assign(this.sun.shadow.camera, { left: -17, right: 17, top: 17, bottom: -17, near: 2, far: 50 });
+    Object.assign(this.sun.shadow.camera, { left: -17, right: 17, top: 19, bottom: -19, near: 2, far: 60 });
     this.sun.shadow.bias = -0.0006;
     this.scene.add(this.sun);
     this.moon = new THREE.DirectionalLight(0x8fb2ff, 0.0);
@@ -199,27 +240,55 @@ export class World {
     this.scene.add(this.cityLamp);
   }
 
-  // ---------- 岛屿 ----------
+  // ---------- 岛屿（V0.5：圆角矩形，把 4×4 网格 + 前排战斗区一起包住） ----------
   _buildIsland() {
     const island = new THREE.Group();
-    // 沙底
-    const sand = mesh(new THREE.CylinderGeometry(11.4, 12.6, 1.6, 36), M(C.sand), 0, -0.8, 0, false);
-    sand.receiveShadow = true;
+    const I = D.ISLAND;
+    const w = I.maxX - I.minX, d = I.maxZ - I.minZ;
+    const cx = (I.minX + I.maxX) / 2, cz = (I.minZ + I.maxZ) / 2;
+
+    // ⚠️ 实测：ExtrudeGeometry 挤出方向是 +z，rotateX(-90°) 之后换算到 **+y**，
+    //    所以 mesh.position.y 是**底面高度**，体积向上生长（务必以此为准，别凭直觉）。
+    //    两层的高度关系在这里一次算清，避免"草地被沙滩埋掉 / 地块悬空"这类错位。
+    const SAND_BOTTOM = -1.6, SAND_DEPTH = 1.9;      // 沙滩：底 -1.6 → 顶 0.3
+    const GRASS_BOTTOM = SAND_BOTTOM + SAND_DEPTH;   // 草地：从沙滩顶面起 → 顶 1.0
+    const GRASS_DEPTH = 0.7;
+
+    // 沙滩底盘（比草地大一圈）
+    const sandShape = roundedRect(w / 2, d / 2, I.corner);
+    const sandGeo = new THREE.ExtrudeGeometry(sandShape, { depth: SAND_DEPTH, bevelEnabled: false, curveSegments: 14 });
+    sandGeo.rotateX(-Math.PI / 2);
+    const sand = new THREE.Mesh(sandGeo, M(C.sand));
+    sand.position.set(cx, SAND_BOTTOM, cz);
+    sand.castShadow = false; sand.receiveShadow = true;
     island.add(sand);
-    // 草地
-    const grass = mesh(new THREE.CylinderGeometry(10.9, 11.15, 0.9, 36), M(C.grass), 0, 0.05, 0, false);
+
+    // 草地（内缩 1.1）
+    const grassShape = roundedRect(w / 2 - 1.1, d / 2 - 1.1, Math.max(0.6, I.corner - 0.9));
+    const grassGeo = new THREE.ExtrudeGeometry(grassShape, { depth: GRASS_DEPTH, bevelEnabled: false, curveSegments: 14 });
+    grassGeo.rotateX(-Math.PI / 2);
+    const grass = new THREE.Mesh(grassGeo, M(C.grass));
+    grass.position.set(cx, GRASS_BOTTOM, cz);
     grass.receiveShadow = true;
     island.add(grass);
-    // 泥土小径：主城 → 海滩
-    const path = mesh(new THREE.PlaneGeometry(2.6, 13), M(C.dirt), 0, 0.52, 1.5, false);
+    this.grassTop = GRASS_BOTTOM + GRASS_DEPTH;   // 草地顶面高度，供地块/作物对齐
+    this.islandMeshes = [sand, grass];            // 调试句柄：便于外部核对两层高度
+
+    // 泥土小径：主城 → 前排登陆区（网格正中偏 +z 一路铺到沙滩）
+    const path = mesh(new THREE.PlaneGeometry(3.0, 7.2), M(C.dirt), 0, this.grassTop + 0.02, D.APRON_Z0 + 3.4, false);
     path.rotation.x = -Math.PI / 2;
     island.add(path);
-    const path2 = mesh(new THREE.PlaneGeometry(12, 1.8), M(C.dirt), 0, 0.52, -3.4, false);
+    // 横向主路：串起左右两侧格子（沿主城所在行的下缘）
+    const path2 = mesh(new THREE.PlaneGeometry(11.4, 1.4), M(C.dirt), 0, this.grassTop + 0.02, D.GRID_ORIGIN_Z + 1.6, false);
     path2.rotation.x = -Math.PI / 2;
     island.add(path2);
-    // 棕榈树与岩石点缀
+
+    // 棕榈树：只种在网格 + 战斗区以外的沙滩边缘
     const rng = () => Math.random();
-    const palmSpots = [[-9.2, 3.4], [9.4, 2.6], [-8.4, -6.8], [8.8, -7.6], [-3.4, 8.6], [4.2, 8.9], [-10.2, -1.4], [10.4, -2.2]];
+    const palmSpots = [
+      [-7.4, -10.6], [7.4, -10.6], [-7.4, -5.6], [7.4, -5.6],
+      [-7.4, -0.6], [7.4, -0.6], [-7.6, 4.4], [7.6, 4.4],
+    ];
     for (const [x, z] of palmSpots) {
       const t = new THREE.Group();
       const h = 1.6 + rng() * 0.9;
@@ -230,13 +299,14 @@ export class World {
         leaf.translateY(0.5); leaf.translateX(0.45);
         t.add(leaf);
       }
-      t.position.set(x, 0.5, z);
+      t.position.set(x, this.grassTop, z);
       t.rotation.y = rng() * 6;
       island.add(t);
     }
-    const rockSpots = [[-6.2, 6.4], [7.2, 5.8], [-9.6, 5.2], [9.8, 6.6]];
+    // 岩石：点缀在战斗区两翼，不挡登陆航道
+    const rockSpots = [[-7.8, 7.6], [7.8, 7.6], [-6.6, 2.0], [6.6, 2.0]];
     for (const [x, z] of rockSpots) {
-      const r = mesh(new THREE.DodecahedronGeometry(0.3 + rng() * 0.3), M(C.stone), x, 0.6, z);
+      const r = mesh(new THREE.DodecahedronGeometry(0.3 + rng() * 0.3), M(C.stone), x, this.grassTop + 0.1, z);
       r.rotation.set(rng() * 3, rng() * 3, 0);
       island.add(r);
     }
@@ -245,7 +315,7 @@ export class World {
 
   // ---------- 水面 ----------
   _buildWater() {
-    const geo = new THREE.PlaneGeometry(220, 220, 64, 64);
+    const geo = new THREE.PlaneGeometry(260, 260, 64, 64);
     this.waterMat = new THREE.MeshStandardMaterial({ color: C.water, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.94 });
     this.water = new THREE.Mesh(geo, this.waterMat);
     this.water.rotation.x = -Math.PI / 2;
@@ -253,11 +323,16 @@ export class World {
     this.water.receiveShadow = false;
     this.scene.add(this.water);
     this.waterBase = geo.attributes.position.array.slice();
-    // 海岸泡沫圈
-    const foam = new THREE.Mesh(new THREE.RingGeometry(12.2, 13.6, 48),
-      new THREE.MeshBasicMaterial({ color: 0xdff3ff, transparent: true, opacity: 0.35 }));
-    foam.rotation.x = -Math.PI / 2;
-    foam.position.y = -0.28;
+    // 海岸泡沫圈：贴着圆角矩形岛屿外缘的一圈浅色浪花
+    const I = D.ISLAND, pad = 1.2;
+    const hw = (I.maxX - I.minX) / 2, hd = (I.maxZ - I.minZ) / 2;
+    const foamShape = roundedRectRing(hw + pad, hd + pad, I.corner + pad, hw, hd, I.corner);
+    const foamGeo = new THREE.ShapeGeometry(foamShape, 16);
+    foamGeo.rotateX(-Math.PI / 2);
+    const foam = new THREE.Mesh(foamGeo, new THREE.MeshBasicMaterial({
+      color: 0xdff3ff, transparent: true, opacity: 0.42, side: THREE.DoubleSide, depthWrite: false,
+    }));
+    foam.position.set((I.minX + I.maxX) / 2, -0.3, (I.minZ + I.maxZ) / 2);
     this.scene.add(foam);
     this.foam = foam;
   }
@@ -307,7 +382,9 @@ export class World {
     g.add(this.cityIcon);
     drawIcon(this.cityIcon, '🏠');
 
-    g.position.set(x, 0.5, z);
+    g.position.set(x, this.grassTop + 0.02, z);
+    // V0.5：主城占网格中心 2×2（世界 6.0×6.0），模型放大到 ~4.0 宽，四周留出通行余量
+    g.scale.setScalar(1.35);
     this.cityGroup = g;
     this.scene.add(g);
   }
@@ -320,41 +397,72 @@ export class World {
     drawBar(this.cityBar, hp / maxHp, { color: hp / maxHp > 0.35 ? '#7fd4ff' : '#e0604d' });
   }
 
-  // ---------- 农田 ----------
+  // ---------- 农田（V0.5：放置式 —— 未建格显示"可建造"提示，已建格显示土块） ----------
   _buildPlots() {
     this.plotRoot = new THREE.Group();
+    const y = this.grassTop + 0.05;
+    const side = D.TILE - 0.42;
     D.PLOT_POSITIONS.forEach((pos, i) => {
       const g = new THREE.Group();
-      const soil = mesh(new THREE.BoxGeometry(1.8, 0.22, 1.8), M(C.soil), 0, 0.11, 0);
+
+      // 已建成农田：翻耕过的深色土块 + 更暗的内圈（与"待开垦"荒地拉开明度差）
+      const soil = mesh(new THREE.BoxGeometry(side, 0.28, side), M(C.soil), 0, 0.14, 0);
       g.add(soil);
-      const inner = mesh(new THREE.BoxGeometry(1.55, 0.1, 1.55), M(C.soilDark), 0, 0.2, 0, false);
+      const inner = mesh(new THREE.BoxGeometry(side - 0.45, 0.14, side - 0.45),
+        M(0x7d4c26), 0, 0.25, 0, false);
       g.add(inner);
-      // 锁定幽灵
-      const ghost = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.22, 1.8),
-        new THREE.MeshStandardMaterial({ color: C.soil, transparent: true, opacity: 0.14, roughness: 1 }));
-      ghost.position.y = 0.11;
+
+      // 未建成：颜色更浅的"待开垦"荒地（比草地亮、比土块亮得多，一眼可辨）
+      const ghost = new THREE.Mesh(
+        new THREE.BoxGeometry(side, 0.18, side),
+        new THREE.MeshStandardMaterial({ color: C.waste, roughness: 1, flatShading: true }));
+      ghost.position.y = 0.09;
       g.add(ghost);
-      const lock = makeCanvasSprite(null, 64, 64, [0.5, 0.5]);
-      lock.position.y = 0.9;
-      drawIcon(lock, '🔒', 40);
-      g.add(lock);
-      g.position.set(pos.x, 0.5, pos.z);
-      g.userData = { plotIndex: i, soil, inner, ghost, lock, baseMat: soil.material };
+
+      // 四周木栅栏（未建时才显示）—— 明确表达"这格可以建造"
+      const posts = [];
+      const half = side / 2;
+      const railMat = M(C.trunk);
+      for (const [dx, dz, len, rot] of [
+        [0, -half, side, 0], [0, half, side, 0],
+        [-half, 0, side, Math.PI / 2], [half, 0, side, Math.PI / 2],
+      ]) {
+        const rail = mesh(new THREE.BoxGeometry(len, 0.09, 0.09), railMat, dx, 0.36, dz);
+        rail.rotation.y = rot;
+        g.add(rail); posts.push(rail);
+      }
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        const post = mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.46, 5), railMat,
+          sx * half, 0.23, sz * half);
+        g.add(post); posts.push(post);
+      }
+
+      // 木材花费提示（未建时才显示）
+      const costTag = makeCanvasSprite(null, 160, 64, [1.3, 0.52]);
+      costTag.position.y = 1.15;
+      drawIcon(costTag, '🪵', 34);
+      g.add(costTag);
+
+      g.position.set(pos.x, y, pos.z);
+      g.userData = { plotIndex: i, soil, inner, ghost, costTag, posts, baseMat: soil.material };
       this.plotRoot.add(g);
       this.plotMeshes.push(g);
     });
     this.scene.add(this.plotRoot);
   }
 
+  // V0.5：农田现在是"已建 / 未建"两种状态（不再是"按顺序解锁"）
   setPlotStates(run) {
-    const unlocked = run._plotsUnlocked ?? D.INITIAL_PLOTS;
+    const built = (i) => run.farms
+      ? run.farms.includes(i)
+      : (i < (run._plotsUnlocked ?? D.INITIAL_PLOTS));   // 兼容旧存档
     this.plotMeshes.forEach((g, i) => {
-      const locked = i >= unlocked;
-      g.userData.ghost.visible = locked;
-      g.userData.lock.visible = locked;
-      g.userData.soil.visible = !locked;
-      g.userData.inner.visible = !locked;
-      g.userData.soil.material = locked ? g.userData.soil.material : M(C.soil);
+      const b = built(i);
+      g.userData.ghost.visible = !b;
+      g.userData.costTag.visible = !b;
+      g.userData.soil.visible = b;
+      g.userData.inner.visible = b;
+      for (const post of g.userData.posts) post.visible = !b;
     });
   }
 
@@ -460,11 +568,15 @@ export class World {
     return 'seedling';
   }
 
+  // 作物在地块上的落位高度（跟随草地顶面）
+  _cropY() { return this.grassTop + 0.55; }
+
   // 同步白天农田作物视图
   refreshRun(run) {
     this.setPlotStates(run);
     this.setCityLevel(run.city.level);
     this.setCityBar(run.city.hp, run.city.maxHp);
+    const y = this._cropY();
     const seen = new Set();
     for (const p of run.plants) {
       seen.add(p.id);
@@ -474,7 +586,7 @@ export class World {
         if (v) { this.cropRoot.remove(v.group); }
         const group = this._buildCropModel(p.defId, stage, p.evolved);
         const pos = D.PLOT_POSITIONS[p.plot];
-        group.position.set(pos.x, 0.55, pos.z);
+        group.position.set(pos.x, y, pos.z);
         group.userData.plantId = p.id;
         // 成熟指示（图标 + 形状双通道表达，文档第 8 节）
         if (stage === 'mature') {
@@ -489,7 +601,7 @@ export class World {
         this.plantViews.set(p.id, v);
       } else if (v.plot !== p.plot) {
         const pos = D.PLOT_POSITIONS[p.plot];
-        v.group.position.set(pos.x, 0.55, pos.z);
+        v.group.position.set(pos.x, y, pos.z);
         v.plot = p.plot;
       }
     }
@@ -736,13 +848,13 @@ export class World {
         this.unitRoot.add(group);
         v = { group, bar, unit: u, plantId: u.plantId, home: pv ? { x: pv.group.position.x, z: pv.group.position.z } : { x: u.x, z: u.z } };
         // 从农田位置出发
-        group.position.set(v.home.x, 0.55, v.home.z);
+        group.position.set(v.home.x, this._cropY(), v.home.z);
         this.unitViews.set(u.id, v);
       }
       // 平滑移动到战斗位置
       v.group.position.x += (u.x - v.group.position.x) * Math.min(1, dt * 4);
       v.group.position.z += (u.z - v.group.position.z) * Math.min(1, dt * 4);
-      v.group.position.y = 0.55 + Math.abs(Math.sin(this.time * 2 + u.id)) * 0.03;
+      v.group.position.y = this._cropY() + Math.abs(Math.sin(this.time * 2 + u.id)) * 0.03;
       v.group.rotation.z = Math.sin(this.time * 2.2 + u.id) * 0.03;
       // 受击闪红
       if (u.hitFlash > 0.05) {
@@ -846,7 +958,7 @@ export class World {
       const pv = v.plantId ? this.plantViews.get(v.plantId) : null;
       if (pv) {
         const pos = D.PLOT_POSITIONS[pv.plot];
-        v.group.position.set(pos.x, 0.55, pos.z);
+        v.group.position.set(pos.x, this._cropY(), pos.z);
         v.group.rotation.set(0, 0, 0);
         v.group.traverse(o => { if (o.isMesh && o.material.emissive) o.material.emissive.setHex(0x000000); });
         this.unitRoot.remove(v.group);
@@ -889,12 +1001,13 @@ export class World {
   }
   setHoverPlot(index) {
     if (this.hoverPlot === index) return;
+    const base = this.grassTop + 0.06;
     if (this.hoverPlot != null) {
       const g = this.plotMeshes[this.hoverPlot];
-      g.position.y = 0.5;
+      g.position.y = base;
     }
     this.hoverPlot = index;
-    if (index != null) this.plotMeshes[index].position.y = 0.62;
+    if (index != null) this.plotMeshes[index].position.y = base + 0.12;
   }
 
   // 行动反馈动画

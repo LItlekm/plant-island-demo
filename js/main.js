@@ -14,6 +14,18 @@ window.__game = game;
 
 game.showTitle();
 
+// 调试：?autostart=<buildId> 直接进白天（便于无头截图/回归验证，正常游玩不会触发）
+// 附加 &clean=1 则不弹威胁预告，用于纯净的取景截图
+const _q = new URLSearchParams(location.search);
+const _auto = _q.get('autostart');
+if (_auto) {
+  import('./domain.js').then((dm) => {
+    game.run = dm.createRunState(_auto === '1' ? undefined : Number(_auto) || undefined, 'balanced');
+    game._enterDay(game.run.day, true);
+    if (_q.get('clean')) setTimeout(() => ui.closeModal?.(), 60);
+  });
+}
+
 let last = performance.now();
 function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000);

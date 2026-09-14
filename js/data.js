@@ -3,31 +3,90 @@
 // 规则：禁止把平衡常量散落在 View 脚本，全部集中于此。
 // ============================================================
 
-// ---------- 地图布局 ----------
-// 12 个农田格位置（前 6 个为初始格）。x 横向，z 纵向（+z 朝海）。
-export const PLOT_POSITIONS = [
-  { x: -6.6, z: -6.4 }, { x: -4.6, z: -6.4 }, { x: -6.6, z: -4.2 }, { x: -4.6, z: -4.2 },
-  { x:  4.6, z: -6.4 }, { x:  6.6, z: -6.4 }, { x:  4.6, z: -4.2 }, { x:  6.6, z: -4.2 },
-  { x: -6.6, z: -2.0 }, { x: -4.6, z: -2.0 }, { x:  4.6, z: -2.0 }, { x:  6.6, z: -2.0 },
-];
-export const INITIAL_PLOTS = 6;
-export const CITY_POSITION = { x: 0, z: -6.2 };
-export const SEA_Z = 10.5;      // 敌人海上生成线
-export const BEACH_Z = 6.8;     // 海岸线（登陆点）
+// ---------- 地图布局（V0.5：4×4 网格） ----------
+// 海岛是一张 4×4 的方格地（16 格），主城固定占据正中的 2×2（4 格），
+// 其余 12 格是空地（初始为荒草地，玩家用木材把农田"放"上去）。
+//
+// 网格坐标：gx 0..3 横向（+x 向右），gz 0..3 纵向（+z 朝海，敌人从 +z 登陆）。
+// 主城占 gz∈{1,2} × gx∈{1,2}，即格号 5、6、9、10（gridIdx = gz*4 + gx）。
+//
+// 世界坐标换算：以网格中心为原点，但整体沿 -z 后移 ORIGIN_Z，
+// 目的是把 +z 一侧让出来做「沙滩登陆区 + 防守阵列」（战斗区不能压在农田上）。
+export const GRID_SIZE = 4;          // 4×4
+export const TILE = 3.0;             // 每格边长（世界单位）
+export const GRID_ORIGIN_Z = -4.5;   // 网格中心的世界 z（主城就在这条线上）
+// 主城占据的格号（gz*4 + gx）：(1,1)(2,1)(1,2)(2,2)
+export const CITY_TILES = [5, 6, 9, 10];
+
+const _toWorld = (gx, gz) => ({
+  x: (gx - (GRID_SIZE - 1) / 2) * TILE,
+  z: (gz - (GRID_SIZE - 1) / 2) * TILE + GRID_ORIGIN_Z,
+});
+
+// 12 个可建格的世界位置（row-major，跳过主城 4 格）。
+// 索引即 plants[].plot 的取值空间，也是农田建造/占用的最小单位。
+//   0..3  = 最里排（gz=0，离海最远，最安全）
+//   4,5   = 主城所在排的左右两侧（gz=1）
+//   6,7   = 同上（gz=2）
+//   8..11 = 最靠海一排（gz=3，最先接敌）
+export const PLOT_POSITIONS = (() => {
+  const out = [];
+  for (let gz = 0; gz < GRID_SIZE; gz++) {
+    for (let gx = 0; gx < GRID_SIZE; gx++) {
+      if (CITY_TILES.includes(gz * GRID_SIZE + gx)) continue;
+      out.push(_toWorld(gx, gz));
+    }
+  }
+  return out;
+})();
+export const BUILDABLE_TILES = PLOT_POSITIONS.length;   // 12
+
+// 免费农田数：开局构筑自带的那几块地（= 起始作物数）。
+// 其余地块都必须用木材建造 —— 见 domain.canBuildFarm。
+export const INITIAL_PLOTS = 2;
+
+export const CITY_POSITION = { x: 0, z: GRID_ORIGIN_Z };   // = 网格正中
+export const CITY_FOOTPRINT = TILE * 2;                    // 主城占地 2×2
+
+// 战斗区（+z 一侧的沙滩，在网格之外）
+export const APRON_Z0 = GRID_ORIGIN_Z + (GRID_SIZE / 2) * TILE;  // 网格前排边缘 ≈ +1.5
+export const SEA_Z = 13.0;      // 敌人海上生成线
+export const BEACH_Z = 8.2;     // 海岸线（登陆点）
+
+// 海岛外形（圆角矩形，把 4×4 网格 + 前排战斗区一起包住）
+export const ISLAND = {
+  minX: -8.6, maxX: 8.6,
+  minZ: -12.4, maxZ: 9.6,
+  corner: 3.4,
+};
 
 // 夜间防守阵列槽位（自动摆放，玩家不微操 —— 文档第 3 节）
-// 顺序为中心优先：只有 1 株时守在中央要道
+// 顺序 = 中心优先，只有 1 株时守在中央要道。
+// V0.5：全部重排到网格前排的沙滩战斗区（z 由大到小 = 由前到后），
+//       容量 7 + 12 + 4 = 23，远高于 12 格农田的满编上限，杜绝槽位重叠。
 export const DEFENSE_SLOTS = {
-  guard:    [{ x: 0, z: 1.2 }, { x: -2.4, z: 1.2 }, { x: 2.4, z: 1.2 }, { x: -4.6, z: 1.2 }, { x: 4.6, z: 1.2 }],
-  attacker: [{ x: 0, z: -0.8 }, { x: -2.6, z: -0.8 }, { x: 2.6, z: -0.8 }, { x: -5.0, z: -0.8 }, { x: 5.0, z: -0.8 }, { x: -1.3, z: -2.0 }, { x: 1.3, z: -2.0 }],
-  support:  [{ x: -1.6, z: -2.8 }, { x: 1.6, z: -2.8 }, { x: 0, z: -3.6 }],
+  // 前排堵口（承伤）：z ≈ 6.4 ~ 7.2
+  guard: [
+    { x: 0, z: 6.9 }, { x: -2.8, z: 6.9 }, { x: 2.8, z: 6.9 },
+    { x: -5.4, z: 6.9 }, { x: 5.4, z: 6.9 },
+    { x: -1.4, z: 5.8 }, { x: 1.4, z: 5.8 },
+  ],
+  // 中排输出：z ≈ 2.6 ~ 4.7
+  attacker: [
+    { x: 0, z: 4.7 }, { x: -2.8, z: 4.7 }, { x: 2.8, z: 4.7 },
+    { x: -5.6, z: 4.7 }, { x: 5.6, z: 4.7 },
+    { x: -1.4, z: 3.7 }, { x: 1.4, z: 3.7 }, { x: -4.2, z: 3.7 }, { x: 4.2, z: 3.7 },
+    { x: 0, z: 2.7 }, { x: -2.8, z: 2.7 }, { x: 2.8, z: 2.7 },
+  ],
+  // 后排支援（向日葵）：贴着网格前排边缘
+  support: [
+    { x: -1.4, z: 1.7 }, { x: 1.4, z: 1.7 }, { x: -4.2, z: 1.7 }, { x: 4.2, z: 1.7 },
+  ],
 };
 
-// ---------- 初始资源 ----------
+// ---------- 资源口径 ----------
 // V0.2：经济重构为 阳光 + 木材 双资源（移除战利品与进化核心）
-export const INITIAL_STATE = {
-  sun: 60, materials: 0,
-};
+// V0.3：初始资源不再全局固定，改由开局构筑 STARTING_BUILDS 各自定义
 
 // ---------- 行动消耗 ----------
 export const ACTION_COST = {
@@ -35,7 +94,19 @@ export const ACTION_COST = {
   cultivate:{ ap: 1 },
   harvest:  { ap: 1 },
   upgrade:  { ap: 0, sunByLevel: { 2: 30, 3: 60 } },  // V0.2：升级不再消耗 AP
-  expand:   { ap: 2, materialsByCount: [20, 26, 32, 40, 50, 60] }, // 第 7..12 块地
+  // V0.4：农田定价从「解锁价」改为「建造价」（木材 = 建筑统一货币），价格按已建数量递增。
+  // V0.5：地图切成 4×4 网格后，可自建格数 = 12 - 2（构筑自带）= 10 档。
+  // 递增值曲线设计依据见 .workbuddy/docs/木材经济与农田定价方案_V0.4.md
+  //
+  // 曲线口径：前 3 档刻意压便宜（立住经济），中段线性增长（每天基本能买 1 格），
+  //           尾段陡涨（第 9~10 格是"锦上添花"，不是通关必需）。
+  //           合计 213 🪵 —— 目标让玩家在第 7 天左右买到第 7~8 档，
+  //           剩下 2 档留给后续几天的容错资源。
+  //
+  // AP 从 2 降到 1：实测发现扩建与种植争抢同一个 AP 池——
+  //   每天 8 AP，若扩张 2AP/格，连买 3 格就吃掉 6 AP，当天无法种植/培育/收割。
+  //   扩建本身不产生战力，不该与"种植"等价消耗。
+  expand:   { ap: 1, materialsByCount: [6, 8, 11, 14, 18, 22, 27, 32, 38, 45] },
   cityUpgrade: { ap: 0, sunByLevel: { 2: 120, 3: 240 } }, // V0.2：主城升级改用阳光
   greenhouse: { ap: 2, materials: 40 },  // 岛屿强化：每日自然成长 +1
 };
@@ -46,15 +117,29 @@ export const CITY_LEVELS = {
   3: { maxHp: 200, armor: 2 },
 };
 
+// V0.4：农田建造价查表（单一数据源，domain 与 ui 都调它，避免两处索引逻辑不同步）。
+// built = 已建成的农田数量（含构筑自带，故内部减掉 INITIAL_PLOTS 再查表）。
+// 价格表用尽时回落到最后一档，而不是返回 null —— 兜底避免"无价可查"崩掉 UI。
+export function plotBuildCost(built) {
+  const table = ACTION_COST.expand.materialsByCount;
+  if (!table || table.length === 0) return null;
+  const i = Math.min(Math.max(0, built - INITIAL_PLOTS), table.length - 1);
+  return table[i];
+}
+
 // ---------- 作物定义（文档第 4 节） ----------
 // maturityDays = 成长阈值（每日自然 +1，培育 +1）
+// V0.4：新增 harvestMaterials —— 收割战斗作物产出木材（木材 = 建筑统一货币）。
+//   收割 = 主动换取：割掉后该地块清空，需重新种植 + 等待成熟，形成每日取舍。
+//   向日葵不产木材（它是阳光泵，harvestSun 保持 30）。
 export const CROPS = {
   sunflower: {
     id: 'sunflower', name: '向日葵', icon: '🌻', role: '资源与支援',
     maturityDays: 2, hp: 25, attack: 0, attackInterval: 0, range: 0,
-    tags: ['生长'], cost: 20, unlockDay: 1,
+    tags: ['生长'], cost: 20,
     passiveSun: 15,       // 成熟后每天早晨产出阳光
     harvestSun: 30,       // 收获一次性阳光
+    harvestMaterials: 0,  // V0.4：向日葵不产木材
     teamBuff: 0.08,       // 夜间全队攻击加成（每株）
     levelBonus: { hp: 5, passiveSun: 4, teamBuff: 0.02 },
     desc: '成熟时每天产出阳光；夜晚为全队提供攻击加成。',
@@ -62,14 +147,16 @@ export const CROPS = {
   peashooter: {
     id: 'peashooter', name: '豌豆射手', icon: '🫛', role: '单体远程输出',
     maturityDays: 2, hp: 30, attack: 8, attackInterval: 1.0, range: 4.5,
-    tags: ['射击'], cost: 30, unlockDay: 2,
+    tags: ['射击'], cost: 30,
+    harvestMaterials: 12, // V0.4：主战力即主木材源 → 制造真实取舍
     levelBonus: { hp: 6, attack: 2 },
     desc: '自动攻击距离主城最近的敌人。',
   },
   wallnut: {
     id: 'wallnut', name: '坚果', icon: '🥔', role: '前排承伤',
     maturityDays: 3, hp: 150, attack: 0, attackInterval: 0, range: 0,
-    tags: ['守护'], cost: 25, unlockDay: 1,
+    tags: ['守护'], cost: 25,
+    harvestMaterials: 10, // V0.4：战力价值高，换木材回报略低
     levelBonus: { hp: 15 },
     tauntRadius: 8.0,     // 吸引周围敌人攻击自己（覆盖全部登陆航道）
     desc: '优先吸引敌人攻击，拥有高生命值。',
@@ -78,11 +165,55 @@ export const CROPS = {
     id: 'cornpitcher', name: '玉米投手', icon: '🌽', role: '范围控制',
     maturityDays: 3, hp: 40, attack: 6, attackInterval: 1.6, range: 5.0,
     aoeRadius: 2.2, slowChance: 0.35, slowDuration: 1.5, slowFactor: 0.5,
-    tags: ['投掷'], cost: 40, unlockDay: 4,
+    tags: ['投掷'], cost: 40,
+    harvestMaterials: 16, // V0.4：造价最贵，割掉回报最高
     levelBonus: { hp: 6, attack: 2 },
     desc: '对小范围敌人造成伤害，并有概率短暂减速。',
   },
 };
+
+// ---------- 开局构筑（V0.3 新增） ----------
+// 玩家点「开始新游戏」后选择一个初始构筑，决定本局的起手。
+// 每个构筑定义四件事：
+//   plants  —— 起始就成熟的作物（放在 BUILD_START_PLOTS 指定的地块上，自带土地）
+//   seeds   —— 本局可用种子池（V0.3 起不再按天解锁种子，整个种子池由构筑决定）
+//   sun/materials —— 初始资源（materials = 木材，V0.5 起给少量启动木材，让建造机制开局就能用）
+//   perk    —— 专属特性，直接写进 run.mod，复用夜间三选一的同一套乘区
+// 注意：perk.mod 与 NIGHT_MODS 会叠加，调平衡时两边一起看。
+// V0.5：构筑不再声明 plots（免费农田数）。免费农田数 = 起始作物数（自带土地），
+//       其余 10 格一律用木材购买 —— 见 domain.canBuildFarm。
+// V0.5：起始作物落在网格"最里排 + 主城左右"的格子上（索引见 PLOT_POSITIONS 注释），
+//       这一排离海最远、最安全，符合"开局优先发育经济"的手感。
+export const BUILD_START_PLOTS = [1, 2, 0, 3, 8, 9, 10, 11, 4, 5, 6, 7];
+export const STARTING_BUILDS = [
+  {
+    id: 'balanced', name: '均衡开局', icon: '🌻', tagline: '容错最高',
+    desc: '1 株向日葵 + 1 株豌豆射手。白天有稳定阳光产出，夜晚有基础火力，三种起始种子最全。',
+    plants: ['sunflower', 'peashooter'],
+    seeds: ['sunflower', 'peashooter', 'wallnut'],
+    sun: 60, materials: 10,
+    perk: { label: '全队作物生命 +12%', mod: { hpMul: 0.12 } },
+  },
+  {
+    id: 'assault', name: '攻坚开局', icon: '🫛', tagline: '首夜最稳',
+    desc: '1 株豌豆射手 + 1 株坚果。开局就能扛住第一夜，但没有阳光产出，经济全靠夜战赏金。',
+    plants: ['peashooter', 'wallnut'],
+    seeds: ['peashooter', 'wallnut', 'sunflower'],
+    sun: 50, materials: 12,
+    perk: { label: '射击作物攻击 +15%', mod: { shootAtkMul: 0.15 } },
+  },
+  {
+    id: 'economy', name: '经济开局', icon: '☀️', tagline: '滚雪球，但首夜最危险',
+    desc: '2 株向日葵起步。白天阳光涨得最快，但第一夜没有任何输出——必须当天现种并培育出战力。',
+    plants: ['sunflower', 'sunflower'],
+    seeds: ['sunflower', 'peashooter'],
+    sun: 100, materials: 8,
+    perk: { label: '阳光产出 +25%', mod: { sunMul: 0.25 } },
+  },
+];
+export function buildById(id) {
+  return STARTING_BUILDS.find(b => b.id === id) || STARTING_BUILDS[0];
+}
 
 // ---------- 进化定义（V0.2 重构） ----------
 // 条件：成熟作物 + 阳光（无天数限制、无核心、无等级要求）
@@ -230,29 +361,31 @@ export const NIGHTS = {
 // ---------- 威胁预告文案（文档第 6 节：只给策略信息） ----------
 export const THREAT_FORECASTS = {
   1:  { title: '漂流蟹来袭', level: '少', tags: ['基础近战'], hint: '成熟的作物会自动迎击。试试再种一株作物、或培育加速成熟。' },
-  2:  { title: '海盗登陆', level: '少', tags: ['标准近战'], hint: '豌豆射手种子已解锁，远程输出是防线核心。' },
-  3:  { title: '潮汐鱼群', level: '中', tags: ['快速敌群'], hint: '成群快速敌人！玉米投手（明日解锁）或更多射手可以应对。' },
+  2:  { title: '海盗登陆', level: '少', tags: ['标准近战'], hint: '远程输出是防线核心——确保有足够射击作物在今晚成熟。' },
+  3:  { title: '潮汐鱼群', level: '中', tags: ['快速敌群'], hint: '成群快速敌人！范围伤害（玉米投手）或更多射手可以应对。' },
   4:  { title: '混合掠夺者', level: '中', tags: ['近战混编'], hint: '解锁夜后三选一：胜利后可挑选构筑方向。' },
   5:  { title: '礁石巨人苏醒', level: '精英', tags: ['重甲目标'], hint: '重甲削减每次伤害！需要更高的单发攻击与坚果前排。' },
-  6:  { title: '精英混合波', level: '精英', tags: ['重甲目标', '快速敌群'], hint: '扩张农田、凑齐同标签作物可激活流派羁绊。' },
+  6:  { title: '精英混合波', level: '精英', tags: ['重甲目标', '快速敌群'], hint: '木材富余就继续铺农田、凑齐同标签作物激活流派羁绊。' },
   7:  { title: '快速敌群', level: '多', tags: ['快速敌群'], hint: '提示：成熟作物可消耗阳光进化（点击作物，二选一方向）。' },
-  8:  { title: '重甲压境', level: '精英', tags: ['重甲目标', '近战混编'], hint: '检验阵容厚度：第二次扩张或岛屿强化（温室）已可用。' },
+  8:  { title: '重甲压境', level: '精英', tags: ['重甲目标', '近战混编'], hint: '检验阵容厚度：农田应已铺得差不多，温室（岛屿强化）也已可用。' },
   9:  { title: 'Boss 前哨波', level: '大军', tags: ['重甲目标', 'Boss 先兆'], hint: '明日幽灵船长亲自登陆——完成进化或激活羁绊！' },
   10: { title: '幽灵船长', level: 'Boss', tags: ['Boss', '召唤', '高伤害'], hint: '最终决战！击败幽灵船长即可守下这座岛。' },
 };
 
 // ---------- 十天日程（新内容教学，文档第 7 节） ----------
+// V0.3：种子不再按天解锁（改由开局构筑决定），此处只保留「功能解锁」与教学文案。
+// unlockFeatures 仍然按天开：expand（第 3 天）/ pick3（第 4 天）/ greenhouse（第 8 天）
 export const DAY_SCRIPT = {
-  1:  { unlocks: [], notes: ['引导：种植 → 培育 → 结束白天'], tutorial: true },
-  2:  { unlocks: ['peashooter'], notes: ['解锁豌豆射手种子与收获行动'] },
-  3:  { unlockFeatures: ['expand'], notes: ['解锁农田扩张'], bonus: { materials: 8, label: '岛屿补给（特殊预告奖励）' } },
-  4:  { unlocks: ['cornpitcher'], unlockFeatures: ['pick3'], notes: ['解锁玉米投手与夜后三选一'] },
-  5:  { unlocks: [], notes: ['警告：礁石巨人出现'] },
-  6:  { unlockFeatures: [], notes: ['扩张节点与流派提示'], bonus: { materials: 8, label: '岛屿补给（特殊预告奖励）' } },
-  7:  { unlockFeatures: [], notes: ['提示：成熟作物可消耗阳光进化（点击作物，二选一方向）'], bonus: { materials: 10, label: '进化支援补给' } },
+  1:  { notes: ['引导：种植 → 培育 → 结束白天'], tutorial: true },
+  2:  { notes: ['提示：远程输出是防线核心，确保有足够射击作物成熟'] },
+  3:  { notes: ['提示：木材用来在空地上「建造农田」——点击荒草地即可放置'], bonus: { materials: 12, label: '岛屿补给（特殊预告奖励）' } },
+  4:  { unlockFeatures: ['pick3'], notes: ['解锁夜后三选一：胜利后可挑选构筑方向'] },
+  5:  { notes: ['警告：礁石巨人出现——重甲削减每次伤害'] },
+  6:  { notes: ['提示：木材富余时优先铺满农田——每天 8 AP 是真正的瓶颈'] },
+  7:  { notes: ['提示：成熟作物可消耗阳光进化（点击作物，二选一方向）'], bonus: { materials: 10, label: '进化支援补给' } },
   8:  { unlockFeatures: ['greenhouse'], notes: ['岛屿强化（温室）解锁'], bonus: { materials: 8, label: '岛屿补给（特殊预告奖励）' } },
-  9:  { unlocks: [], notes: ['Boss 威胁完整预告'], bonus: { sun: 60, label: '决战储备（阳光）' } },
-  10: { unlocks: [], notes: ['最终夜：击败幽灵船长！'] },
+  9:  { notes: ['Boss 威胁完整预告'], bonus: { sun: 60, label: '决战储备（阳光）' } },
+  10: { notes: ['最终夜：击败幽灵船长！'] },
 };
 
 // ---------- 夜战胜利奖励（V0.2：阳光 + 木材双资源） ----------

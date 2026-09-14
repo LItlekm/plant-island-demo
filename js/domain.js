@@ -15,47 +15,74 @@ export function mulberry32(seed) {
   };
 }
 
-export function createRunState(seed = (Date.now() & 0xffffffff)) {
+export function createRunState(seed = (Date.now() & 0xffffffff), buildId = D.STARTING_BUILDS[0].id) {
+  const build = D.buildById(buildId);
   const st = {
     seed, rngState: seed,
+    buildId: build.id,
     day: 1, phase: 'dayStart', ap: 8,
-    sun: D.INITIAL_STATE.sun, materials: D.INITIAL_STATE.materials,
+    sun: build.sun, materials: build.materials,
     city: { level: 1, hp: D.CITY_LEVELS[1].maxHp, maxHp: D.CITY_LEVELS[1].maxHp, armor: D.CITY_LEVELS[1].armor },
     plants: [], nextPlantId: 1,
-    unlockedSeeds: ['sunflower', 'wallnut'],
-    features: { expand: false, pick3: false, greenhouse: false },
+    unlockedSeeds: build.seeds.slice(),   // V0.3：本局种子池完全由构筑决定
+    // V0.5：农田改为「放置式」—— farms 是已建成农田的格号集合（无序）。
+    //   · 初始为空，随后由起始作物自动落位建造（自带土地）。
+    //   · 其余格必须调 canBuildFarm / doBuildFarm 才能变成农田。
+    farms: [],
+    freeFarms: build.plants.length,       // 构筑自带的免费农田数（= 起始作物数）
+    features: { expand: true, pick3: false, greenhouse: false },  // V0.5：建造农田不再按天解锁（木材本身即门槛）
     greenhoused: false,
     modsTaken: [],              // 夜后三选一已选 id
-    mod: { shootAtkMul: 0, throwAtkMul: 0, hpMul: 0, speedMul: 0, sunMul: 0, cultivateBonus: 0, thorns: 0, aoeMul: 0, regenPerSec: 0 },
+    mod: {
+      shootAtkMul: 0, throwAtkMul: 0, hpMul: 0, speedMul: 0, sunMul: 0,
+      cultivateBonus: 0, thorns: 0, aoeMul: 0, regenPerSec: 0,
+      ...build.perk.mod,        // 构筑专属特性（复用同一套乘区，与三选一叠加）
+    },
     cultivateUsedToday: 0,
     stats: { planted: 0, harvested: 0, killed: 0, nightsWon: 0, evolvedCount: 0 },
-    tutorial: { plant: false, cultivate: false, endDay: false },
+    tutorial: { plant: false, cultivate: false, buildFarm: false, endDay: false },
   };
-  // 初始盘面：3 株初始成熟作物（向日葵/豌豆射手/坚果），文档第 1 节
-  const initial = [
-    { defId: 'sunflower', plot: 0 },
-    { defId: 'peashooter', plot: 4 },
-    { defId: 'wallnut', plot: 2 },
-  ];
-  for (const it of initial) {
+  // 起始盘面：由开局构筑决定（V0.3），起始作物直接以成熟状态落位，
+  // 并且"自带土地"—— 落位的同时把该格标记为已建农田（V0.5）。
+  build.plants.forEach((defId, i) => {
+    const tile = D.BUILD_START_PLOTS[i];
+    if (tile == null) return;
+    if (!st.farms.includes(tile)) st.farms.push(tile);
     st.plants.push({
-      id: st.nextPlantId++, defId: it.defId, plot: it.plot,
-      growth: CROPS(it.defId).maturityDays, level: 1, evolved: false, evolvedId: null,
+      id: st.nextPlantId++, defId, plot: tile,
+      growth: CROPS(defId).maturityDays, level: 1, evolved: false, evolvedId: null,
     });
-  }
+  });
   return st;
 }
 function CROPS(id) { return D.CROPS[id]; }
 
 // ---------- 查询 ----------
 export const plotOf = (st, idx) => st.plants.find(p => p.plot === idx && !p.dead) || null;
+
+// V0.5：某格是否已建成农田
+export function isFarmBuilt(st, idx) {
+  return Array.isArray(st.farms) && st.farms.includes(idx);
+}
+// 已建成农田数（含构筑自带的 freeFarms）
+export function plotsUnlocked(st) {
+  if (Array.isArray(st.farms)) return st.farms.length;
+  return st._plotsUnlocked ?? D.INITIAL_PLOTS;   // 兼容旧存档（v2 save）
+}
+// 已建且为空的格（可种植的格）
 export function emptyPlots(st) {
   const list = [];
-  for (let i = 0; i < plotsUnlocked(st); i++) if (!plotOf(st, i)) list.push(i);
+  for (let i = 0; i < D.PLOT_POSITIONS.length; i++) {
+    if (isFarmBuilt(st, i) && !plotOf(st, i)) list.push(i);
+  }
   return list;
 }
-// 已解锁格数（存 runs 状态里，避免依赖视图）
-export function plotsUnlocked(st) { return st._plotsUnlocked ?? D.INITIAL_PLOTS; }
+// 未建但可建造的格
+export function buildableTiles(st) {
+  const list = [];
+  for (let i = 0; i < D.PLOT_POSITIONS.length; i++) if (!isFarmBuilt(st, i)) list.push(i);
+  return list;
+}
 
 export function isMature(p) { return p.growth >= CROPS(p.defId).maturityDays; }
 export function maturePlants(st) { return st.plants.filter(isMature); }
@@ -73,9 +100,9 @@ export function plantSunOutput(st, p) {
 }
 
 export function upgradeCost(p) { return D.ACTION_COST.upgrade.sunByLevel[p.level + 1] ?? null; }
+// V0.4/V0.5：农田建造价。查表逻辑集中在 data.plotBuildCost（内部已扣掉 freeFarms）。
 export function expandCost(st) {
-  const count = plotsUnlocked(st) - D.INITIAL_PLOTS;
-  return D.ACTION_COST.expand.materialsByCount[count] ?? null;
+  return D.plotBuildCost(plotsUnlocked(st));
 }
 
 // ---------- 标签统计与羁绊（文档第 5 节） ----------
@@ -105,7 +132,8 @@ export function canPlant(st, plotIdx, seedId) {
   const def = CROPS(seedId);
   if (!def) return check(false, '未知种子');
   if (!st.unlockedSeeds.includes(seedId)) return check(false, `${def.name}种子尚未解锁`);
-  if (plotIdx == null || plotIdx < 0 || plotIdx >= plotsUnlocked(st)) return check(false, '地块未解锁');
+  if (plotIdx == null || plotIdx < 0 || plotIdx >= D.PLOT_POSITIONS.length) return check(false, '地块不存在');
+  if (!isFarmBuilt(st, plotIdx)) return check(false, '这里还没有农田：先用木材建造农田');
   if (plotOf(st, plotIdx)) return check(false, '地块已被占用');
   if (st.sun < def.cost) return check(false, `阳光不足（需要 ${def.cost}）`);
   return check(true);
@@ -160,15 +188,25 @@ export function canHarvest(st, plantId) {
 }
 export function harvestYield(st, p) {
   const c = CROPS(p.defId);
-  if (c.id === 'sunflower') {
+  const out = {};
+  // 向日葵：收获一次性阳光（阳光泵）
+  if (c.harvestSun) {
     let s = c.harvestSun;
     if (p.evolved) {
       const br = D.evolutionBranch('sunflower', p.evolvedId);
       if (br?.bonus.harvestSun) s += br.bonus.harvestSun;
     }
-    return { sun: Math.round(s * (1 + st.mod.sunMul)) };
+    out.sun = Math.round(s * (1 + st.mod.sunMul));
   }
-  return {}; // 战斗作物收获后移除（文档第 4 节）
+  // V0.4：战斗作物收割产出木材（木材 = 建筑统一货币，是白天的主动收入来源）
+  // 取舍：割掉 → 得木材 → 地块清空，需重新种植 + 等待成熟
+  if (c.harvestMaterials) {
+    const lvB = c.levelBonus || {};
+    // 等级越高，割掉越可惜 → 木材回报略高，但永远低于「继续培养」的价值
+    const bonus = Math.round(c.harvestMaterials * 0.15 * (p.level - 1));
+    out.materials = c.harvestMaterials + bonus;
+  }
+  return out;
 }
 export function doHarvest(st, plantId) {
   const v = canHarvest(st, plantId);
@@ -177,6 +215,7 @@ export function doHarvest(st, plantId) {
   st.ap -= D.ACTION_COST.harvest.ap;
   const y = harvestYield(st, p);
   st.sun += y.sun || 0;
+  st.materials += y.materials || 0;   // V0.4：收割木材
   st.plants = st.plants.filter(x => x.id !== plantId);
   st.stats.harvested++;
   logEvent(st, 'harvest', { plantId, yield: y });
@@ -205,23 +244,38 @@ export function doUpgrade(st, plantId) {
   return { ok: true, level: p.level };
 }
 
-export function canExpand(st) {
-  if (st.phase !== 'day') return check(false, '只能在白天扩张');
-  if (!st.features.expand) return check(false, '扩张尚未解锁（第 3 天）');
+// ---------- 建造农田（V0.5：放置式，取代原来的"解锁下一格"） ----------
+// tileIdx = PLOT_POSITIONS 的下标；玩家点哪一格就把农田放在哪一格。
+export function canBuildFarm(st, tileIdx) {
+  if (st.phase !== 'day') return check(false, '只能在白天建造');
+  if (tileIdx == null || tileIdx < 0 || tileIdx >= D.PLOT_POSITIONS.length) return check(false, '地块不存在');
+  if (isFarmBuilt(st, tileIdx)) return check(false, '这一格已经有农田了');
   if (plotsUnlocked(st) >= D.PLOT_POSITIONS.length) return check(false, '农田已达上限');
-  if (st.ap < D.ACTION_COST.expand.ap) return check(false, '行动点不足（需要 2）');
+  if (st.ap < D.ACTION_COST.expand.ap) return check(false, `行动点不足（需要 ${D.ACTION_COST.expand.ap}）`);
   const cost = expandCost(st);
-  if (st.materials < cost) return check(false, `材料不足（需要 ${cost}）`);
+  if (st.materials < cost) return check(false, `木材不足（需要 ${cost}）`);
   return check(true);
 }
-export function doExpand(st) {
-  const v = canExpand(st);
+// 是否还有任何一格可建（用于按钮置灰 / 文案判断）
+export function canBuildAnyFarm(st) {
+  if (buildableTiles(st).length === 0) return check(false, '农田已达上限');
+  if (st.phase !== 'day') return check(false, '只能在白天建造');
+  if (st.ap < D.ACTION_COST.expand.ap) return check(false, `行动点不足（需要 ${D.ACTION_COST.expand.ap}）`);
+  const cost = expandCost(st);
+  if (st.materials < cost) return check(false, `木材不足（需要 ${cost}）`);
+  return check(true);
+}
+export function doBuildFarm(st, tileIdx) {
+  const v = canBuildFarm(st, tileIdx);
   if (!v.ok) return v;
+  const cost = expandCost(st);          // 必须在改动 farms 之前取价（取价依赖已建数量）
   st.ap -= D.ACTION_COST.expand.ap;
-  st.materials -= expandCost(st);
-  st._plotsUnlocked = plotsUnlocked(st) + 1;
-  logEvent(st, 'expand', { plots: st._plotsUnlocked });
-  return { ok: true, plots: st._plotsUnlocked };
+  st.materials -= cost;
+  if (!Array.isArray(st.farms)) st.farms = [];
+  st.farms.push(tileIdx);
+  if (st.tutorial) st.tutorial.buildFarm = true;
+  logEvent(st, 'buildFarm', { tile: tileIdx, farms: st.farms.length, cost });
+  return { ok: true, tile: tileIdx, farms: st.farms.length, cost };
 }
 
 export function canCityUpgrade(st) {
@@ -246,7 +300,7 @@ export function canGreenhouse(st) {
   if (st.phase !== 'day') return check(false, '只能在白天建造');
   if (!st.features.greenhouse) return check(false, '温室尚未解锁（第 8 天）');
   if (st.greenhoused) return check(false, '已建造温室');
-  if (st.ap < D.ACTION_COST.greenhouse.ap) return check(false, '行动点不足（需要 2）');
+  if (st.ap < D.ACTION_COST.greenhouse.ap) return check(false, `行动点不足（需要 ${D.ACTION_COST.greenhouse.ap}）`);
   if (st.materials < D.ACTION_COST.greenhouse.materials) return check(false, `材料不足（需要 ${D.ACTION_COST.greenhouse.materials}）`);
   return check(true);
 }
@@ -338,9 +392,8 @@ export function applyDayStart(st, day) {
   let sunGain = 0;
   for (const p of maturePlants(st)) sunGain += plantSunOutput(st, p);
   st.sun += sunGain;
-  // 当日解锁
+  // 当日解锁（V0.3：种子池已由开局构筑决定，这里只处理功能解锁）
   const script = D.DAY_SCRIPT[day] || {};
-  for (const s of script.unlocks || []) if (!st.unlockedSeeds.includes(s)) st.unlockedSeeds.push(s);
   for (const f of script.unlockFeatures || []) st.features[f] = true;
   if (script.bonus) {
     if (script.bonus.materials) st.materials += script.bonus.materials;

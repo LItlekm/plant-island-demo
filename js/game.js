@@ -44,7 +44,7 @@ export class Game {
     this.ui.cb = {
       onSelectSeed: (id) => this._selectSeed(id),
       onEndDay: () => this._endDay(),
-      onExpand: () => this._globalAction(() => dm.doExpand(this.run), '🌱 农田扩张完成'),
+      onExpand: () => this._buildFarmHint(),
       onGreenhouse: () => this._globalAction(() => dm.doGreenhouse(this.run), '🏡 温室建成：所有作物每日自然成长 +1'),
       onCityUpgrade: () => this._globalAction(() => dm.doCityUpgrade(this.run), '🏠 主城升级成功'),
       onPlantAction: (act, plantId) => this._plantAction(act, plantId),
@@ -68,9 +68,16 @@ export class Game {
   }
 
   newGame() {
-    dm.clearSave();
-    this.run = dm.createRunState();
-    this._enterDay(this.run.day, true);
+    // V0.3：先让玩家选开局构筑，再据此建局
+    this.ui.showBuildSelect(
+      D.STARTING_BUILDS,
+      (build) => {
+        dm.clearSave();
+        this.run = dm.createRunState(undefined, build.id);
+        this._enterDay(this.run.day, true);
+      },
+      () => this.showTitle(),
+    );
   }
 
   continueGame() {
@@ -110,6 +117,7 @@ export class Game {
     this.ui.showTutorial(this.run.day === 1, [
       { text: '在下方选择种子，点击空地种植', done: this.run.tutorial.plant },
       { text: '点击幼苗进行培育（加速成熟）', done: this.run.tutorial.cultivate },
+      { text: '点击荒草地花木材建造农田（自带作物已占地）', done: this.run.tutorial.buildFarm },
       { text: '点击「结束白天」，看作物自动迎战', done: this.run.tutorial.endDay },
     ]);
   }
@@ -139,6 +147,7 @@ export class Game {
       this.ui.showTutorial(true, [
         { text: '在下方选择种子，点击空地种植', done: this.run.tutorial.plant },
         { text: '点击幼苗进行培育（加速成熟）', done: this.run.tutorial.cultivate },
+        { text: '点击荒草地花木材建造农田（自带作物已占地）', done: this.run.tutorial.buildFarm },
         { text: '点击「结束白天」，看作物自动迎战', done: this.run.tutorial.endDay },
       ]);
     } else {
@@ -159,14 +168,55 @@ export class Game {
     if (r.ok) this.ui.hidePanels();
   }
 
+  // V0.5：在想建农田的格子上建造（点空地点一下就建，代价 = 木材 + 1 AP）
+  _tryBuildFarm(idx) {
+    const v = dm.canBuildFarm(this.run, idx);
+    if (!v.ok) {
+      sfx.error();
+      // 木材不够时把"怎么攒木材"讲清楚，而不是干巴巴报错
+      if (String(v.reason).startsWith('木材不足')) {
+        this.ui.toast(`❌ ${v.reason}｜收割成熟作物可获得木材`, 'bad');
+      } else {
+        this.ui.toast(`❌ ${v.reason}`, 'bad');
+      }
+      return;
+    }
+    const cost = dm.expandCost(this.run);
+    const r = dm.doBuildFarm(this.run, idx);
+    if (r.ok) {
+      const p = D.PLOT_POSITIONS[idx];
+      sfx.plant();
+      this.world.floatText(p.x, 1.4, p.z, `-${cost}🪵`, 'good');
+      this._spend({ ok: true }, `🪵 农田已建成（花费 ${cost}🪵）｜把种子放上去开始种植`);
+    } else {
+      this._spend(r);
+    }
+  }
+
+  // 全局「建造农田」按钮：不改数据，只负责把玩法讲清楚（真正的建造发生在点击格子上）
+  _buildFarmHint() {
+    sfx.click();
+    const st = this.run;
+    const v = dm.canBuildAnyFarm(st);
+    const left = dm.buildableTiles(st).length;
+    const cost = dm.expandCost(st);
+    if (left === 0) { this.ui.toast('🪵 12 格农田已全部铺满', 'info'); return; }
+    if (!v.ok) {
+      sfx.error();
+      this.ui.toast(`❌ ${v.reason}｜当前木材 ${st.materials}🪵，需要 ${cost}🪵`, 'bad');
+      return;
+    }
+    this.ui.toast(`👆 点击任意一格荒草地即可建造农田（${cost}🪵 + ${D.ACTION_COST.expand.ap}AP）｜还剩 ${left} 格`, 'info');
+  }
+
   _handleClick(ev) {
     const hit = this.world.pick(ev);
     if (!hit) { this.ui.hidePanels(); return; }
     if (hit.type === 'city') { sfx.click(); this.ui.showCityPanel(this.run); return; }
     if (hit.type === 'plot') {
       const idx = hit.index;
-      const unlocked = idx < dm.plotsUnlocked(this.run);
-      if (!unlocked) { sfx.error(); this.ui.toast('🔒 地块未解锁：消耗材料扩张后可用', 'bad'); return; }
+      // V0.5：农田改为放置式 —— 未建格点一下就建造，已建格才进入种植/操作逻辑
+      if (!dm.isFarmBuilt(this.run, idx)) { this._tryBuildFarm(idx); return; }
       const plant = dm.plotOf(this.run, idx);
       if (!plant) {
         const seed = this.ui.selectedSeed;
@@ -209,6 +259,49 @@ export class Game {
     this.ui.showPlantPanel(this.run, plant, actions);
   }
 
+  // V0.4：收割预警 —— 判断这株作物是否是"当前防线主力"。
+  // 判据：成熟 + 有攻击力 + 处于今夜会上阵的成熟作物集合中。
+  // 返回确认文案（null = 无需确认）。
+  _harvestWarning(p) {
+    if (!p || !dm.isMature(p)) return null;
+    const def = D.CROPS[p.defId];
+    if (!(def.attack > 0)) return null;   // 向日葵割了不心疼
+    const combat = dm.maturePlants(this.run).filter(x => D.CROPS[x.defId].attack > 0);
+    if (combat.length === 0) return null;
+    // 这株的输出占当前总输出多少
+    const atkOf = (x) => {
+      const c = D.CROPS[x.defId];
+      const lv = c.levelBonus?.attack || 0;
+      let a = c.attack + lv * (x.level - 1);
+      if (x.evolved) {
+        const b = D.evolutionBranch(x.defId, x.evolvedId)?.bonus || {};
+        if (b.attack) a += b.attack;
+        if (b.attackMul) a *= b.attackMul;
+        if (b.doubleShot) a *= 2;
+      }
+      return a / (c.attackInterval || 1);
+    };
+    const mine = atkOf(p);
+    const total = combat.reduce((s, x) => s + atkOf(x), 0);
+    const share = total > 0 ? mine / total : 0;
+    // 只在割掉后阵容明显变薄时提示（占比 >= 25%，或割完剩不到 2 株输出）
+    const thin = (combat.length - 1) < 2;
+    if (share < 0.25 && !thin) return null;
+    const pct = Math.round(share * 100);
+    return `⚠️ 收割防线警告\n\n` +
+      `这株【${def.name}】是今晚的首发输出：\n` +
+      `· 它承担了全队约 ${pct}% 的输出\n` +
+      `· 割掉后，今晚只剩 ${combat.length - 1} 株输出作物\n` +
+      `· 换来的木材：${def.harvestMaterials || 0} 🪵\n\n` +
+      `确定要收割吗？（割掉后地块会空出，需要重新种植并等待成熟）`;
+  }
+  _harvestMsg(y) {
+    const parts = [];
+    if (y.sun) parts.push(`+${y.sun}☀️`);
+    if (y.materials) parts.push(`+${y.materials}🪵`);
+    return parts.length ? `🧺 收获 ${parts.join(' ')}` : '🧺 已收获，地块空出';
+  }
+
   _plantAction(act, plantId) {
     let r, msg, pos = null;
     const p = this.run.plants.find(x => x.id === plantId);
@@ -224,11 +317,16 @@ export class Game {
       }
     } else if (act === 'harvest') {
       const y = dm.harvestYield(this.run, p);
+      // V0.4：收割预警 —— 割掉的是当前防线主力时，先确认再执行。
+      // 不禁止（保留取舍自由），但让失误是"可预见的失误"而不是阴沟里翻船。
+      const warn = this._harvestWarning(p);
+      if (warn && !window.confirm(warn)) { this.ui.showPanels?.(); return; }
       r = dm.doHarvest(this.run, plantId);
-      msg = r.ok ? (y.sun ? `🧺 收获 +${y.sun}☀️` : '🧺 已收获，地块空出') : '';
+      msg = r.ok ? this._harvestMsg(y) : '';
       if (r.ok) {
         sfx.harvest();
         if (y.sun) this.world.floatText(pos.x, 1.8, pos.z, `+${y.sun}☀️`, 'sun');
+        if (y.materials) this.world.floatText(pos.x, 2.2, pos.z, `+${y.materials}🪵`, 'good');
       }
     } else if (act === 'upgrade') {
       r = dm.doUpgrade(this.run, plantId);
