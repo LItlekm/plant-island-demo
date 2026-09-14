@@ -152,6 +152,8 @@ export class World {
     this.enemyViews = new Map();    // enemyId -> {group, bar, type, parts}
     this.projViews = new Set();     // {mesh, proj}
     this.particles = [];
+    this.chainLines = [];           // V0.7：连锁电弧线段
+    this.gustRings = [];            // V0.7：旋风冲击环
     this.cropRoot = new THREE.Group();
     this.unitRoot = new THREE.Group();
     this.fxRoot = new THREE.Group();
